@@ -59,10 +59,18 @@ Fixed particle pool (~1–2 M capacity) in `instancedArray` buffers: position, v
 ### 4.6 Imperfection layer (§5) — fire, not geometry
 Randomness is a specified subsystem, not incidental jitter. All noise derives from the show seed + `instanceIndex` hashing (reproducible).
 
-### 4.7 Renderer (`src/gpu/render.ts`)
-Instanced sprites via `SpriteNodeMaterial` (`colorNode`, `positionNode`, `scaleNode`, `opacityNode`); scene pass with MRT emissive channel → selective `bloom(emissivePass, strength, radius)` → ACES filmic tone mapping through `RenderPipeline.outputNode`. Dark sky, subtle horizon/ground silhouette, very dim star field. Exposure eases down slightly during finale density. Smoke: low-count non-emissive drifting sprites spawned at breaks, lit by scene glow, fading over 10–20 s.
+### 4.7 Persistent atmosphere (`src/gpu/atmosphere.ts`) — stateful smoke
+The sky has memory. A burst leaves a smoke cloud whose decay is gradual (minutes-scale, not the burst's lifetime), and every later firework interacts with the smoke already hanging there.
 
-### 4.8 Boot/UI (`src/main.ts`)
+- **Smoke density field:** a coarse world-space 3D density grid (low-res storage texture, e.g. 64×32×32 over the sky stage) updated per tick by a compute pass: breaks and rising tails inject density at their position (amount scaled by caliber), the field advects with the global wind, diffuses slowly, and decays exponentially with a 60–180 s time constant. This grid — not per-sprite fading alone — is the persistent state.
+- **Smoke sprites:** low-count non-emissive drifting sprites spawned at breaks visualize the field's near-term structure; their opacity is driven by sampled local density so they dissipate with the field instead of on a fixed timer.
+- **Burst light onto smoke:** the brightest concurrent bursts act as point-light sources for smoke shading. Smoke sprite `colorNode` accumulates contributions from the top-N (≈4) active burst lights (position, color, intensity uniforms maintained by the show loop) with inverse-square falloff — a shell exploding beside an old cloud visibly lights that cloud from its side.
+- **Smoke onto star light:** star sprites sample the density field along the eye ray (few-tap march from star toward camera). Accumulated density widens and dims the halo (larger `scaleNode` glow disc, reduced emissive intensity, slight warm desaturation) — a firework bursting behind lingering smoke reads hazy and diffused, while the first shell of the night is crisp.
+
+### 4.8 Renderer (`src/gpu/render.ts`)
+Instanced sprites via `SpriteNodeMaterial` (`colorNode`, `positionNode`, `scaleNode`, `opacityNode`); scene pass with MRT emissive channel → selective `bloom(emissivePass, strength, radius)` → ACES filmic tone mapping through `RenderPipeline.outputNode`. Dark sky, subtle horizon/ground silhouette, very dim star field. Exposure eases down slightly during finale density. Smoke sprites render in the non-emissive channel so bloom stays selective to burning stars.
+
+### 4.9 Boot/UI (`src/main.ts`)
 Idle screen (title, seed, Start button) → capability probe → fullscreen attempt → show loop. Diagnostic panel on probe failure. `fullscreenerror` tolerated.
 
 ## 5. Imperfection layer (required behaviors)
@@ -78,7 +86,7 @@ Idle screen (title, seed, Start button) → capability probe → fullscreen atte
 
 ## 6. Data flow
 
-catalog JSON → (validate) → planner schedule → compiler `GpuRecipe` → uniform/buffer upload at launch time → GPU compute per tick → instanced draw → MRT/bloom/tonemap → screen (AirPlay mirrors it).
+catalog JSON → (validate) → planner schedule → compiler `GpuRecipe` → uniform/buffer upload at launch time → GPU compute per tick (particles + smoke density field) → instanced draw (stars lit through smoke, smoke lit by bursts) → MRT/bloom/tonemap → screen (AirPlay mirrors it).
 
 ## 7. Error handling
 
@@ -92,6 +100,7 @@ catalog JSON → (validate) → planner schedule → compiler `GpuRecipe` → un
 - **Schema:** every shipped catalog entry validates; provenance fields required for non-generated entries.
 - **Compiler:** crossette recipe yields exactly 4 secondary vectors per primary star; willow star mean lifetime > horsetail; peony recipe has zero trail emission, chrysanthemum non-zero; break-direction sets are non-uniform (asymmetry variance within configured bounds); fixed seed → identical recipe.
 - **Planner:** fixed seed → deterministic schedule; gap and live-star-budget invariants hold over a simulated hour.
+- **Atmosphere:** density-field decay is exponential with the configured time constant (CPU reference implementation of the update rule); injection increases local density; advection moves the density centroid downwind; field never goes negative or NaN under an hour of simulated events.
 - **Smoke test:** server serves `dist/`; page boots; probe path exercised (mock `navigator.gpu` absence → diagnostic panel). Visual realism verified manually on the Mac.
 
 ## 9. Documentation anchors (implementation must copy these patterns)
