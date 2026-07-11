@@ -54,7 +54,7 @@ Pure function: catalog entry + RNG → `GpuRecipe` (typed buffers/uniform values
 Fixed particle pool (~1–2 M capacity) in `instancedArray` buffers: position, velocity, color, age/lifetime, class flags (star | trail spark | crackle micro-flash | smoke). Per tick, TSL compute passes advance:
 - **Ballistics:** gravity; per-particle quadratic drag by star class; global wind + gusts.
 - **Events:** mortar launch with rising-tail spark emission; fuse-timed break; crossette/pistil secondary splits; terminal behaviors (willow hang, horsetail free-fall).
-- **Emission:** dead-slot recycling via atomic cursor or per-slot hash spawn — no CPU per-particle writes during steady state.
+- **Emission:** per-class ring-buffer ranges — each launch event reserves a contiguous slot range on the CPU (one small uniform upload per event), and the compute pass activates slots whose spawn time has arrived. No CPU per-particle writes during steady state; slot ranges recycle after their class's max lifetime.
 
 ### 4.6 Imperfection layer (§5) — fire, not geometry
 Randomness is a specified subsystem, not incidental jitter. All noise derives from the show seed + `instanceIndex` hashing (reproducible).
