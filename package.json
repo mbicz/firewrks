@@ -1,0 +1,23 @@
+{
+  "name": "firewrks",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "serve": "node server/index.mjs",
+    "golden": "node tools/golden.mjs"
+  },
+  "dependencies": {
+    "three": "0.185.0",
+    "serve-handler": "6.1.7"
+  },
+  "devDependencies": {
+    "vite": "^6",
+    "vitest": "^3",
+    "typescript": "^5",
+    "puppeteer": "^24"
+  }
+}
