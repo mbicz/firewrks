@@ -1,0 +1,17 @@
+{
+  "id": "generic-chrysanthemum",
+  "productName": "Generic Chrysanthemum Shell",
+  "sourceUrl": "https://fireworks.com/education-and-safety/glossary",
+  "sourcePublisher": "Phantom Fireworks",
+  "sourceKind": "glossary",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "A spherical break of colored stars, similar to a peony, but with stars that leave a visible trail of sparks.",
+  "normalizationStatus": "direct",
+  "deviceType": "shell",
+  "shotCount": 1,
+  "caliberHint": "medium",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ffffff"], "effectTags": [] },
+    { "kind": "break", "breakFamily": "chrysanthemum", "colors": ["#3060ff", "#ffd700"], "effectTags": ["glitter"] }
+  ]
+}

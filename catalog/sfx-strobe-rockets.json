@@ -1,0 +1,19 @@
+{
+  "id": "sfx-strobe-rockets",
+  "productName": "SFX Strobe Rockets",
+  "sourceUrl": "https://www.superiorfireworks.com/wholesale/product/gx7003/sfx-strobe-rockets",
+  "sourcePublisher": "Superior Fireworks",
+  "sourceKind": "product_page",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "SFX Strobe Rockets light up the sky with dazzling, strobing tails! Each rocket finishes with a brilliant willow \u2014 one all gold, and one gold with red strobe.",
+  "normalizationStatus": "direct",
+  "deviceType": "rocket",
+  "shotCount": 1,
+  "durationSeconds": 5,
+  "caliberHint": "small",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ffffff"], "effectTags": ["strobe"] },
+    { "kind": "break", "breakFamily": "willow", "colors": ["#ffd700"], "effectTags": [] },
+    { "kind": "break", "breakFamily": "willow", "colors": ["#ffd700", "#ff2d2d"], "effectTags": ["strobe"] }
+  ]
+}

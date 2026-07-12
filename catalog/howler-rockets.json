@@ -1,0 +1,21 @@
+{
+  "id": "howler-rockets",
+  "productName": "Howler Rockets",
+  "sourceUrl": "https://www.superiorfireworks.com/wholesale/product/gx7002/howler-rockets",
+  "sourcePublisher": "Superior Fireworks",
+  "sourceKind": "product_page",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "Howler Rockets scream into the air with howling silver tails! Each pack contains two each of four different aerial effects: Howling Silver Tail to Red Stars with Crackle; Howling Silver Tail to Green Wave with Crackle; Howling Silver Tail to Blue and White Strobe; Howling Silver Tail to Brocade with Green Strobe.",
+  "normalizationStatus": "direct",
+  "deviceType": "rocket",
+  "shotCount": 1,
+  "durationSeconds": 5,
+  "caliberHint": "small",
+  "phases": [
+    { "kind": "ascent", "colors": ["#c0c0c0"], "effectTags": ["whistle"] },
+    { "kind": "break", "breakFamily": "peony", "colors": ["#ff2d2d"], "effectTags": ["crackle"] },
+    { "kind": "break", "breakFamily": "peony", "colors": ["#2ecc71"], "effectTags": ["crackle", "wave"] },
+    { "kind": "break", "breakFamily": "peony", "colors": ["#3060ff", "#ffffff"], "effectTags": ["strobe"] },
+    { "kind": "break", "breakFamily": "willow", "colors": ["#2ecc71"], "effectTags": ["brocade", "strobe"] }
+  ]
+}

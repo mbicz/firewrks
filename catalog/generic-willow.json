@@ -1,0 +1,17 @@
+{
+  "id": "generic-willow",
+  "productName": "Generic Willow Shell",
+  "sourceUrl": "https://fireworks.com/education-and-safety/glossary",
+  "sourcePublisher": "Phantom Fireworks",
+  "sourceKind": "glossary",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "Similar to a chrysanthemum, but with long-burning silver or gold stars that produce a soft, dome-shaped weeping willow-like effect.",
+  "normalizationStatus": "direct",
+  "deviceType": "shell",
+  "shotCount": 1,
+  "caliberHint": "large",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ffffff"], "effectTags": [] },
+    { "kind": "break", "breakFamily": "willow", "colors": ["#ffd700", "#c0c0c0"], "effectTags": ["glitter"] }
+  ]
+}
