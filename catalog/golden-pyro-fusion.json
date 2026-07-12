@@ -1,0 +1,18 @@
+{
+  "id": "golden-pyro-fusion",
+  "productName": "Golden Pyro-Fusion, 18 Shot",
+  "sourceUrl": "https://fireworks.com/products/aerial/500-gram-repeaters/golden-pyro-fusion-18-shot",
+  "sourcePublisher": "Phantom Fireworks",
+  "sourceKind": "product_page",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "This 500 gram cake alternates between golden comets breaking with a crackling center and gold crackling comets which break into a golden crossette effect branching off into 4 bright tails!",
+  "normalizationStatus": "direct",
+  "deviceType": "cake",
+  "shotCount": 18,
+  "caliberHint": "small",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ffd700"], "effectTags": [] },
+    { "kind": "break", "breakFamily": "crackling_flower", "colors": ["#ffd700"], "effectTags": ["crackle"] },
+    { "kind": "secondary", "breakFamily": "crossette", "colors": ["#ffd700"], "effectTags": ["crackle"] }
+  ]
+}

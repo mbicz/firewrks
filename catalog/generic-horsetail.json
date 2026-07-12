@@ -1,0 +1,17 @@
+{
+  "id": "generic-horsetail",
+  "productName": "Generic Horsetail Shell",
+  "sourceUrl": "https://fireworks.com/education-and-safety/glossary",
+  "sourcePublisher": "Phantom Fireworks",
+  "sourceKind": "glossary",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "Named for the shape of its break, this shell features heavy long-burning tailed stars that only travel a short distance from the shell burst before free-falling to the ground. Also known as a waterfall shell. Sometimes there is a glittering through the \"waterfall.\"",
+  "normalizationStatus": "direct",
+  "deviceType": "shell",
+  "shotCount": 1,
+  "caliberHint": "medium",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ffffff"], "effectTags": [] },
+    { "kind": "break", "breakFamily": "horsetail", "colors": ["#ffd700"], "effectTags": ["glitter"] }
+  ]
+}

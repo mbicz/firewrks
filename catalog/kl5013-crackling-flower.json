@@ -1,0 +1,18 @@
+{
+  "id": "kl5013-crackling-flower",
+  "productName": "Color Comets and Crackling Flower Barrage",
+  "sourceUrl": "https://www.superiorfireworks.com/wholesale/product/kl5013/color-comets-and-crackling-flower-barrage",
+  "sourcePublisher": "Superior Fireworks",
+  "sourceKind": "product_page",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "A 500-gram barrage cake with 721 shots of red, green, yellow, and blue crackling flower.",
+  "normalizationStatus": "direct",
+  "deviceType": "cake",
+  "shotCount": 721,
+  "durationSeconds": 30,
+  "caliberHint": "small",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ff2d2d", "#2ecc71", "#ffb300", "#3060ff"], "effectTags": [] },
+    { "kind": "break", "breakFamily": "crackling_flower", "colors": ["#ff2d2d", "#2ecc71", "#ffb300", "#3060ff"], "effectTags": ["crackle"] }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "generic-palm",
+  "productName": "Generic Palm Shell",
+  "sourceUrl": "https://fireworks.com/education-and-safety/glossary",
+  "sourcePublisher": "Phantom Fireworks",
+  "sourceKind": "glossary",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "A shell containing a relatively few large comet stars arranged in such a way as to burst with large arms or tendrils, producing a palm tree-like effect. Proper palm shells feature a thick rising tail that displays as the shell ascends, thereby simulating the tree trunk to further enhance the \"palm tree\" effect.",
+  "normalizationStatus": "direct",
+  "deviceType": "shell",
+  "shotCount": 1,
+  "caliberHint": "large",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ffd700"], "effectTags": ["glitter"] },
+    { "kind": "break", "breakFamily": "palm", "colors": ["#ffd700", "#ff2d2d"], "effectTags": [] }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "strobe-spectacular",
+  "productName": "Strobe Spectacular, 20 Shot",
+  "sourceUrl": "https://fireworks.com/products/aerial/500-gram-repeaters/strobe-spectacular-20-shot",
+  "sourcePublisher": "Phantom Fireworks",
+  "sourceKind": "product_page",
+  "accessedOn": "2026-07-11",
+  "verbatimText": "Big blast strobe effects! White/green strobing tails launch into alternating willows in white, green/purple or green/yellow.",
+  "normalizationStatus": "direct",
+  "deviceType": "cake",
+  "shotCount": 20,
+  "caliberHint": "small",
+  "phases": [
+    { "kind": "ascent", "colors": ["#ffffff", "#2ecc71"], "effectTags": ["strobe"] },
+    { "kind": "break", "breakFamily": "willow", "colors": ["#ffffff"], "effectTags": ["strobe"] },
+    { "kind": "break", "breakFamily": "willow", "colors": ["#2ecc71", "#a259ff"], "effectTags": ["strobe"] },
+    { "kind": "break", "breakFamily": "willow", "colors": ["#2ecc71", "#ffd700"], "effectTags": ["strobe"] }
+  ]
+}
