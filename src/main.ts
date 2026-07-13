@@ -1,4 +1,5 @@
 import { probeWebGPU } from './platform/probe';
+import { runDebugSim } from './gpu/sim';
 
 function startShow(seed: number): void {
   // Stub: Phase 7 wires the real show loop (planner -> compiler -> allocator -> GPU).
@@ -28,7 +29,7 @@ function renderIdle(): void {
 
   startBtn.addEventListener('click', async () => {
     const result = await probeWebGPU();
-    if (!result.ok) {
+    if (result.ok === false) {
       renderDiagnostic(result.reason);
       return;
     }
@@ -37,4 +38,20 @@ function renderIdle(): void {
   });
 }
 
-renderIdle();
+async function runDebug(seed: number): Promise<void> {
+  const result = await probeWebGPU();
+  if (result.ok === false) {
+    renderDiagnostic(result.reason);
+    return;
+  }
+  await runDebugSim(seed);
+}
+
+const params = new URLSearchParams(location.search);
+const debugMode = params.get('debug');
+if (debugMode === 'sim') {
+  const seedParam = params.get('seed');
+  void runDebug(seedParam !== null ? Number(seedParam) : Date.now());
+} else {
+  renderIdle();
+}
