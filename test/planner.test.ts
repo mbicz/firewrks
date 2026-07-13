@@ -4,7 +4,7 @@ import { compile } from '../src/show/compiler';
 import { planShow, type PlannerEvent } from '../src/show/planner';
 import { Allocator } from '../src/show/allocator';
 import { mulberry32 } from '../src/show/rng';
-import { FINALE_RESERVE, LULL_MAX_GAP_S, POOL_CAPACITY } from '../src/show/constants';
+import { FINALE_RESERVE, LULL_MAX_GAP_S, MAX_GAP_S, POOL_CAPACITY } from '../src/show/constants';
 
 const entries: CatalogEntry[] = [
   {
@@ -173,8 +173,8 @@ describe('planShow: gap and intensity-envelope invariants over a simulated hour'
 
   it('breathes: some gaps sit in the lull band above MAX_GAP_S, not a constant cadence', () => {
     const gaps = scheduled.slice(1).map((event, i) => event.t - scheduled[i].t);
-    const hasLullGap = gaps.some((g) => g > 2.5);
-    const hasDenseGap = gaps.some((g) => g <= 2.5);
+    const hasLullGap = gaps.some((g) => g > MAX_GAP_S);
+    const hasDenseGap = gaps.some((g) => g <= MAX_GAP_S);
     expect(hasLullGap).toBe(true);
     expect(hasDenseGap).toBe(true);
   });

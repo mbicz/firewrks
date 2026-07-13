@@ -124,8 +124,12 @@ export function* planShow(entries: readonly CatalogEntry[], rng: RNG): Generator
       yield { t, entryId: shot.entry.id, phaseIdx: shot.phaseIdx, x: launchX(), finale: false };
     }
 
+    // Ambient gap: individual shells build one at a time with visible breathing room between
+    // them (spec's original 0.6s floor let launches fire faster than a shell's own visual
+    // decay, reading as simultaneous mass-launch rather than a compounding show — see
+    // constants.ts's MAX_GAP_S/LULL_MAX_GAP_S comment).
     const lull = envelope(t) < LULL_ENVELOPE_THRESHOLD;
-    const gap = lull ? range(rng, [MAX_GAP_S, LULL_MAX_GAP_S]) : range(rng, [0.6, MAX_GAP_S]);
+    const gap = lull ? range(rng, [MAX_GAP_S, LULL_MAX_GAP_S]) : range(rng, [3, MAX_GAP_S]);
     t += gap;
   }
 }
