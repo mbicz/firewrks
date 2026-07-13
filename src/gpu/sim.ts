@@ -31,8 +31,8 @@ import {
 import { Allocator, reserveChildRange, type SlotRange } from '../show/allocator';
 import type { BreakFamily, CatalogEntry } from '../show/catalog';
 import { compile, type GpuRecipe } from '../show/compiler';
-import { G, LAUNCH_TILT_DEG, SIM_HZ, CAMERA } from '../show/constants';
-import { mulberry32, range as rngRange, type RNG } from '../show/rng';
+import { G, LAUNCH_TILT_DEG, SIM_HZ } from '../show/constants';
+import { range as rngRange, type RNG } from '../show/rng';
 
 // ---------------------------------------------------------------------------
 // TSL node type aliases (see header comment for why these exist).
@@ -61,7 +61,7 @@ export const ROLE = { SHELL: 0, STAR: 1, WILLOW: 2, HORSETAIL: 3 } as const;
 // Tuning constants (local to the sim — not part of the frozen `constants.ts` numeric table).
 // ---------------------------------------------------------------------------
 
-const DT = 1 / SIM_HZ;
+export const DT = 1 / SIM_HZ;
 const DT_NODE = float(DT);
 
 const CURL_FREQ = 0.015; // 1/m — macro turbulence wavelength (~65 m), §5.1
@@ -188,7 +188,7 @@ function windNode(windBase: Vec3Node, simTime: FloatNode, classId: FloatNode): V
 /** Three-phase color ramp (ignition white -> agent color -> charcoal ember, spec §3.6) plus a
  * per-star flicker (spec §5.2 "brightness flicker via per-star phase-offset noise"). Shared by the
  * debug point material here and reusable by Phase 5's real render material. */
-function colorRampNode(baseColor: Vec3Node, age: FloatNode, life: FloatNode, flickerPhase: FloatNode, simTime: FloatNode): Vec3Node {
+export function colorRampNode(baseColor: Vec3Node, age: FloatNode, life: FloatNode, flickerPhase: FloatNode, simTime: FloatNode): Vec3Node {
   const t = clamp(age.div(float(1e-4).max(life)), float(0), float(1));
   const ignition = vec3(1, 1, 1);
   const ember = vec3(...EMBER_RGB);
@@ -200,7 +200,7 @@ function colorRampNode(baseColor: Vec3Node, age: FloatNode, life: FloatNode, fli
   return c2.mul(flicker);
 }
 
-function aliveMask(age: FloatNode, life: FloatNode) {
+export function aliveMask(age: FloatNode, life: FloatNode) {
   return age.greaterThanEqual(float(0)).and(age.lessThan(life));
 }
 
@@ -220,6 +220,18 @@ export interface ParticleState {
   life: Float32Array;
   spawnMeta: Float32Array;
   behavior: Float32Array;
+}
+
+/** Buffers/uniforms `src/gpu/render.ts` (plan Phase 5) needs to build the production sprite
+ * material — the contract `ParticleSim.renderBuffers` exposes; see that getter's comment. */
+export interface RenderBuffers {
+  position: StorageBuf;
+  prevPosition: StorageBuf;
+  color: StorageBuf;
+  age: StorageBuf;
+  life: StorageBuf;
+  behavior: StorageBuf;
+  simTime: FloatNode;
 }
 
 export class ParticleSim {
@@ -368,6 +380,26 @@ export class ParticleSim {
     this.sprite = new THREE.Sprite(material);
     this.sprite.count = capacity;
     this.sprite.frustumCulled = false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Minimal read-only accessor for `src/gpu/render.ts` (plan Phase 5): the production
+  // renderer builds its OWN material/sprite/post pipeline from this bundle of buffers/
+  // uniforms rather than this class's debug point material above — no compute-pass or
+  // buffer-layout changes, one additive getter only (plan Phase 5 guard: "add a minimal
+  // getter rather than restructuring the class").
+  // ---------------------------------------------------------------------------
+
+  get renderBuffers(): RenderBuffers {
+    return {
+      position: this.positionBuf,
+      prevPosition: this.prevPositionBuf,
+      color: this.colorBuf,
+      age: this.ageBuf,
+      life: this.lifeBuf,
+      behavior: this.behaviorBuf,
+      simTime: this.simTimeUniform,
+    };
   }
 
   /** Ballistics integration shared by pass (a) and pass (c): gravity + wind + curl noise, quadratic
@@ -692,142 +724,3 @@ export class ParticleSim {
   }
 }
 
-interface FirewrksDebugHandle {
-  stepTicks(n: number): number;
-  renderFrame(): void;
-  getSimTime(): number;
-  readback(): Promise<ParticleState>;
-}
-declare global {
-  interface Window {
-    __firewrksDebug?: FirewrksDebugHandle;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// `?debug=sim` readback/point-render harness (plan Phase 4 step 4).
-// ---------------------------------------------------------------------------
-
-function debugCatalogEntry(id: string, family: BreakFamily, caliberHint: GpuRecipe['caliber'], color: string): CatalogEntry {
-  return {
-    id,
-    productName: `Debug ${family}`,
-    sourceUrl: '',
-    sourcePublisher: '',
-    sourceKind: 'generated',
-    accessedOn: '2026-07-11',
-    verbatimText: 'Synthetic fixture for Phase 4 sim debug verification (not a catalog product).',
-    normalizationStatus: 'inferred',
-    deviceType: 'shell',
-    shotCount: 1,
-    caliberHint,
-    phases: [{ kind: 'break', breakFamily: family, colors: [color], effectTags: [] }],
-  };
-}
-
-const DEBUG_POOL_CAPACITY = 4096;
-
-/**
- * `?debug=sim&seed=N[&timeScale=X]` entry point: launches one test peony and one test crossette,
- * runs the fixed-60Hz-tick simulation, renders the pool as small additive points, and logs a NaN
- * scan of the position buffer every 600 ticks. `timeScale` (default 1) multiplies wall-clock dt
- * before it feeds the accumulator, so e.g. `timeScale=20` compresses a 10-sim-minute run into
- * ~30 real seconds for the NaN-scan verification — documented here since the DoD allows it.
- */
-export async function runDebugSim(seed: number, timeScaleOverride?: number): Promise<void> {
-  const params = new URLSearchParams(location.search);
-  const timeScale = timeScaleOverride ?? Number(params.get('timeScale') ?? '1');
-
-  const renderer = new THREE.WebGPURenderer({ antialias: true });
-  await renderer.init();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-
-  const container = document.querySelector<HTMLDivElement>('#app');
-  if (container) {
-    container.innerHTML = '';
-    container.appendChild(renderer.domElement);
-  } else {
-    document.body.appendChild(renderer.domElement);
-  }
-
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x000000);
-  const camera = new THREE.PerspectiveCamera(CAMERA.fovDeg, window.innerWidth / window.innerHeight, 1, 2000);
-  camera.position.set(0, CAMERA.elev + 80, CAMERA.dist);
-  camera.lookAt(0, 130, 0);
-
-  const sim = new ParticleSim(renderer, DEBUG_POOL_CAPACITY);
-  scene.add(sim.sprite);
-
-  const rng = mulberry32(seed);
-  const peonyEntry = debugCatalogEntry('debug-peony', 'peony', 'small', '#ff6a1a');
-  const crossetteEntry = debugCatalogEntry('debug-crossette', 'crossette', 'small', '#3fb2ff');
-
-  let simTime = 0;
-  let tickCount = 0;
-  let peonyLaunched = false;
-  let crossetteLaunched = false;
-
-  function stepOnce(): void {
-    if (!peonyLaunched) {
-      sim.launch(peonyEntry, 0, rng, simTime, -60, 0);
-      peonyLaunched = true;
-      console.log('[debug:sim] peony launched at simTime=0');
-    }
-    if (!crossetteLaunched) {
-      sim.launch(crossetteEntry, 0, rng, simTime, 60, 0);
-      crossetteLaunched = true;
-      console.log('[debug:sim] crossette launched at simTime=0');
-    }
-
-    sim.tick(simTime);
-    simTime += DT;
-    tickCount++;
-
-    if (tickCount % 600 === 0) {
-      const tickAtScan = tickCount;
-      const simTimeAtScan = simTime;
-      void sim.scanForNaN().then((bad) => {
-        console.log(`[debug:sim] NaN scan @ tick ${tickAtScan} (simTime=${simTimeAtScan.toFixed(1)}s): ${bad}`);
-      });
-    }
-  }
-
-  function renderFrame(): void {
-    renderer.render(scene, camera);
-  }
-
-  // Headless/automated verification hook: `document.hidden` suspends `requestAnimationFrame`
-  // entirely in some headless embedders, so QA drives the fixed-timestep loop manually through
-  // this handle instead of waiting on rAF. The rAF loop below remains the real interactive path.
-  window.__firewrksDebug = {
-    stepTicks(n: number): number {
-      for (let i = 0; i < n; i++) stepOnce();
-      renderFrame();
-      return simTime;
-    },
-    renderFrame,
-    getSimTime: () => simTime,
-    readback: () => sim.readback(),
-  };
-
-  let acc = 0;
-  let lastTs = performance.now();
-
-  function frame(ts: number): void {
-    const rawDt = Math.min((ts - lastTs) / 1000, 0.25);
-    lastTs = ts;
-    acc += rawDt * timeScale;
-
-    while (acc >= DT) {
-      stepOnce();
-      acc -= DT;
-    }
-
-    renderFrame();
-    requestAnimationFrame(frame);
-  }
-
-  requestAnimationFrame(frame);
-}

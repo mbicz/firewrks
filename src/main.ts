@@ -1,5 +1,5 @@
 import { probeWebGPU } from './platform/probe';
-import { runDebugSim } from './gpu/sim';
+import { runDebugSim } from './gpu/debugHarness';
 
 function startShow(seed: number): void {
   // Stub: Phase 7 wires the real show loop (planner -> compiler -> allocator -> GPU).
