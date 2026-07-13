@@ -1,24 +1,31 @@
 // `?debug=sim` readback/visual harness (plan Phase 4 step 4, upgraded by Phase 5 to drive the
-// production `ShowRenderer` instead of `sim.ts`'s Phase-4 debug point material). Lives in its
-// own module — not `sim.ts` — specifically to avoid a `sim.ts` <-> `render.ts` import cycle:
-// `render.ts` imports helpers FROM `sim.ts`, and this harness imports the `ShowRenderer` class
-// FROM `render.ts`, so it must sit outside both.
+// production `ShowRenderer` instead of `sim.ts`'s Phase-4 debug point material, and by Phase 6
+// to drive a real `Atmosphere`). Lives in its own module — not `sim.ts` — specifically to avoid
+// a `sim.ts` <-> `render.ts` import cycle: `render.ts` imports helpers FROM `sim.ts` (and now
+// FROM `atmosphere.ts`), and this harness imports the `ShowRenderer`/`Atmosphere` classes, so it
+// must sit outside both.
 //
-// `?debug=sim&seed=N[&timeScale=X][&shell=blue][&stopAtFrame=N]`:
+// `?debug=sim&seed=N[&timeScale=X][&shell=blue][&pair=1][&stopAtFrame=N]`:
 //   - default: launches one test peony + one test crossette, as Phase 4 established.
 //   - `shell=blue`: launches ONE pure #2244ff test peony only — the tonemap-decision fixture
-//     (plan Phase 5 step 4; see the block comment atop `render.ts`) and the blue-hue-fidelity
-//     half of this phase's DoD.
+//     (plan Phase 5 step 4; see the block comment atop `render.ts`).
+//   - `pair=1`: launches two IDENTICAL peonies at the SAME (x,z), 8 simulated seconds apart —
+//     the plan's Phase 6 DoD visual fixture ("two shells 8s apart at the same x: second burst
+//     visibly hazier and old cloud lit from the new burst's side").
 //   - `stopAtFrame=N`: flips `document.title` to `'FRAME_READY'` after N rendered frames, for
-//     `tools/golden.mjs`'s puppeteer capture (plan step 7).
+//     a future puppeteer capture script.
+//
+// Burst lights and smoke injection are driven by the REAL per-launch `BreakEvent` `sim.launch()`
+// returns (spec §4.7's event->injection hook) — not an approximated stand-in.
 
 import * as THREE from 'three/webgpu';
 
 import type { BreakFamily, CatalogEntry } from '../show/catalog';
 import type { GpuRecipe } from '../show/compiler';
 import { mulberry32 } from '../show/rng';
-import { DT, ParticleSim, type ParticleState } from './sim';
+import { DT, ParticleSim, type BreakEvent, type ParticleState } from './sim';
 import { ShowRenderer, buildShowCamera } from './render';
+import { Atmosphere } from './atmosphere';
 
 function debugCatalogEntry(id: string, family: BreakFamily, caliberHint: GpuRecipe['caliber'], color: string): CatalogEntry {
   return {
@@ -28,7 +35,7 @@ function debugCatalogEntry(id: string, family: BreakFamily, caliberHint: GpuReci
     sourcePublisher: '',
     sourceKind: 'generated',
     accessedOn: '2026-07-11',
-    verbatimText: 'Synthetic fixture for Phase 4/5 sim + render debug verification (not a catalog product).',
+    verbatimText: 'Synthetic fixture for Phase 4/5/6 sim + render + atmosphere debug verification (not a catalog product).',
     normalizationStatus: 'inferred',
     deviceType: 'shell',
     shotCount: 1,
@@ -50,21 +57,30 @@ declare global {
 }
 
 const DEBUG_POOL_CAPACITY = 4096;
+const PAIR_MODE_GAP_S = 8; // plan Phase 6 DoD fixture: "two shells 8s apart at the same x"
+const ASCENT_INJECT_HEIGHT_FRAC = 0.4; // rough mid-rise height for the ascent smoke puff
 
-// Ground/horizon burst-light stub scheduling (see the `setBurstLight`/Phase-6-stub comment on
-// `ShowRenderer`): this harness knows launch position + approximate apex height/fuse time from
-// the debug entries' own caliber constants (NOT the compiled recipe — the recipe is compiled
-// again, with fresh RNG draws, inside `sim.launch()` itself, so peeking at it here would desync
-// the two calls' RNG consumption). "Approximate" is intentional and documented — Phase 6 owns
-// the real per-break light bookkeeping driven by actual GPU break state.
-const DEBUG_BREAK_DELAY_S = 2.5; // mid-range of CALIBER_TABLE.small.rise [2,3]
-const DEBUG_BREAK_HEIGHT = 110; // mid-range of CALIBER_TABLE.small.apex [90,140]
-const DEBUG_BURST_LIGHT_LIFE_S = 1.5; // spec §4.7: "every break for 1.5 s with intensity decay"
+/** One debug launch: fires at `at` (simTime), then schedules its own atmosphere injection/
+ * burst-light registration off the REAL `BreakEvent` `sim.launch()` returns. */
+interface ScheduledLaunch {
+  entry: CatalogEntry;
+  x: number;
+  z: number;
+  at: number;
+  launched: boolean;
+  breakEvent: BreakEvent | null;
+  brokenFired: boolean;
+}
+
+function scheduledLaunch(entry: CatalogEntry, x: number, z: number, at: number): ScheduledLaunch {
+  return { entry, x, z, at, launched: false, breakEvent: null, brokenFired: false };
+}
 
 export async function runDebugSim(seed: number, timeScaleOverride?: number): Promise<void> {
   const params = new URLSearchParams(location.search);
   const timeScale = timeScaleOverride ?? Number(params.get('timeScale') ?? '1');
   const blueShellOnly = params.get('shell') === 'blue';
+  const pairMode = params.get('pair') === '1';
   const stopAtFrame = params.get('stopAtFrame') !== null ? Number(params.get('stopAtFrame')) : null;
 
   const renderer = new THREE.WebGPURenderer({ antialias: true });
@@ -81,8 +97,11 @@ export async function runDebugSim(seed: number, timeScaleOverride?: number): Pro
   }
 
   const camera = buildShowCamera(window.innerWidth / window.innerHeight);
+  const rng = mulberry32(seed);
   const sim = new ParticleSim(renderer, DEBUG_POOL_CAPACITY);
-  const show = new ShowRenderer(renderer, camera, sim);
+  const atmosphere = new Atmosphere(renderer, rng);
+  const show = new ShowRenderer(renderer, camera, sim, atmosphere);
+  show.scene.add(atmosphere.smokeSprite);
 
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -90,53 +109,47 @@ export async function runDebugSim(seed: number, timeScaleOverride?: number): Pro
     camera.updateProjectionMatrix();
   });
 
-  const rng = mulberry32(seed);
-  const peonyEntry = blueShellOnly
-    ? debugCatalogEntry('debug-blue-shell', 'peony', 'medium', '#2244ff')
-    : debugCatalogEntry('debug-peony', 'peony', 'small', '#ff6a1a');
-  const crossetteEntry = debugCatalogEntry('debug-crossette', 'crossette', 'small', '#3fb2ff');
+  const schedule: ScheduledLaunch[] = pairMode
+    ? (() => {
+        const pairEntry = debugCatalogEntry('debug-pair', 'peony', 'medium', '#ff9a3c');
+        return [scheduledLaunch(pairEntry, 0, 0, 0), scheduledLaunch(pairEntry, 0, 0, PAIR_MODE_GAP_S)];
+      })()
+    : blueShellOnly
+      ? [scheduledLaunch(debugCatalogEntry('debug-blue-shell', 'peony', 'medium', '#2244ff'), -60, 0, 0)]
+      : [
+          scheduledLaunch(debugCatalogEntry('debug-peony', 'peony', 'small', '#ff6a1a'), -60, 0, 0),
+          scheduledLaunch(debugCatalogEntry('debug-crossette', 'crossette', 'small', '#3fb2ff'), 60, 0, 0),
+        ];
 
   let simTime = 0;
   let tickCount = 0;
   let frameCount = 0;
-  let peonyLaunched = false;
-  let crossetteLaunched = false;
-  let peonyBurstSet = false;
-  let crossetteBurstSet = false;
-  let peonyBurstCleared = false;
-  let crossetteBurstCleared = false;
 
   function stepOnce(): void {
-    if (!peonyLaunched) {
-      sim.launch(peonyEntry, 0, rng, simTime, -60, 0);
-      peonyLaunched = true;
-      console.log('[debug:sim] peony launched at simTime=0');
-    }
-    if (!blueShellOnly && !crossetteLaunched) {
-      sim.launch(crossetteEntry, 0, rng, simTime, 60, 0);
-      crossetteLaunched = true;
-      console.log('[debug:sim] crossette launched at simTime=0');
+    for (const item of schedule) {
+      if (!item.launched && simTime >= item.at) {
+        item.breakEvent = sim.launch(item.entry, 0, rng, simTime, item.x, item.z);
+        item.launched = true;
+        console.log(`[debug:sim] launched "${item.entry.id}" at simTime=${simTime.toFixed(2)}`);
+        if (item.breakEvent) {
+          const ascentPos = new THREE.Vector3(item.x, item.breakEvent.position.y * ASCENT_INJECT_HEIGHT_FRAC, item.z);
+          atmosphere.injectAscent(ascentPos, item.breakEvent.starCount);
+        }
+      }
+      if (item.breakEvent && !item.brokenFired && simTime >= item.breakEvent.breakTime) {
+        atmosphere.registerBreak(item.breakEvent.position, item.breakEvent.color, item.breakEvent.starCount, simTime);
+        item.brokenFired = true;
+        console.log(`[debug:sim] "${item.entry.id}" broke at simTime=${simTime.toFixed(2)}`);
+      }
     }
 
-    // Break-flash-adjacent stub burst lights (see the comment above `DEBUG_BREAK_DELAY_S`).
-    if (!peonyBurstSet && simTime >= DEBUG_BREAK_DELAY_S) {
-      show.setBurstLight(0, new THREE.Vector3(-60, DEBUG_BREAK_HEIGHT, 0), new THREE.Color(0xff6a1a), 4000);
-      peonyBurstSet = true;
-    }
-    if (!peonyBurstCleared && simTime >= DEBUG_BREAK_DELAY_S + DEBUG_BURST_LIGHT_LIFE_S) {
-      show.clearBurstLight(0);
-      peonyBurstCleared = true;
-    }
-    if (!blueShellOnly) {
-      if (!crossetteBurstSet && simTime >= DEBUG_BREAK_DELAY_S) {
-        show.setBurstLight(1, new THREE.Vector3(60, DEBUG_BREAK_HEIGHT, 0), new THREE.Color(0x3fb2ff), 4000);
-        crossetteBurstSet = true;
-      }
-      if (!crossetteBurstCleared && simTime >= DEBUG_BREAK_DELAY_S + DEBUG_BURST_LIGHT_LIFE_S) {
-        show.clearBurstLight(1);
-        crossetteBurstCleared = true;
-      }
-    }
+    atmosphere.tick(
+      simTime,
+      DT,
+      sim.windVector,
+      (i, position, color, intensity) => show.setBurstLight(i, position, color, intensity),
+      (i) => show.clearBurstLight(i),
+    );
 
     sim.tick(simTime);
     simTime += DT;

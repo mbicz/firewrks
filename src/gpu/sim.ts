@@ -234,6 +234,24 @@ export interface RenderBuffers {
   simTime: FloatNode;
 }
 
+/** Returned by `launch()` on success (spec §4.7 "event->injection" hook): the CPU already knows
+ * the break's simTime and approximate world position at launch time (breaks are fuse-timed, not
+ * detected from GPU state), so `src/gpu/atmosphere.ts`/callers use this to schedule smoke
+ * injection and burst-light registration precisely instead of approximating (as
+ * `debugHarness.ts` previously did with hard-coded `DEBUG_BREAK_*` stand-ins). */
+export interface BreakEvent {
+  /** simTime this shell breaks (`now + recipe.fuseTime`). */
+  breakTime: number;
+  /** Approximate break position: launch (x,z) with y = the compiled recipe's apex height. An
+   * approximation (ascent isn't perfectly vertical, spec §5.7 wobble) — documented, not hidden. */
+  position: THREE.Vector3;
+  /** Agent color (colorRamp mid phase) — shared by the burst-light color and smoke tint. */
+  color: THREE.Color;
+  caliber: GpuRecipe['caliber'];
+  starCount: number;
+  breakRadius: number;
+}
+
 export class ParticleSim {
   readonly capacity: number;
   readonly allocator: Allocator;
@@ -402,6 +420,15 @@ export class ParticleSim {
     };
   }
 
+  /** Read-only CPU snapshot of the global wind vector (additive getter, spec §4.7 "the [smoke]
+   * field advects with the global wind" — the SAME wind driving particle ballistics, not a
+   * divergent value atmosphere.ts would otherwise have to invent). Per-class gust/damping
+   * (`windNode`) stays GPU-only/procedural; this exposes only the base vector callers need to
+   * drive their own CPU-side scheduling or a coarse-field compute pass. */
+  get windVector(): THREE.Vector3 {
+    return this.windUniform.value.clone();
+  }
+
   /** Ballistics integration shared by pass (a) and pass (c): gravity + wind + curl noise, quadratic
    * drag opposing velocity, semi-implicit Euler (spec §2, §4.5). Division-by-zero is avoided (never
    * `normalize()` on a possibly-zero velocity) so a freshly-activated, still-motionless particle
@@ -500,10 +527,11 @@ export class ParticleSim {
    * `starCount` break stars (spec §4.5 "Emission (parent-index indirection)"), and — depending on
    * the recipe — pre-reserved crossette/trail/crackle child ranges, each with its own baked-in
    * jittered `spawnTime`. This is the ONLY per-event CPU->GPU write path; nothing here runs per
-   * tick. Returns `false` (never overwrites a live range) when the pool has no room, matching the
-   * allocator's defer contract.
+   * tick. Returns `null` (never overwrites a live range) when the pool has no room, matching the
+   * allocator's defer contract — otherwise returns the resulting `BreakEvent` so callers (e.g.
+   * `atmosphere.ts`) can schedule smoke injection/burst lights off its exact `breakTime`.
    */
-  launch(entry: CatalogEntry, phaseIdx: number, rng: RNG, now: number, launchX: number, launchZ: number): boolean {
+  launch(entry: CatalogEntry, phaseIdx: number, rng: RNG, now: number, launchX: number, launchZ: number): BreakEvent | null {
     const family = entry.phases[phaseIdx]?.breakFamily;
     if (!family) throw new Error(`ParticleSim.launch: phase ${phaseIdx} of "${entry.id}" has no breakFamily`);
     const recipe = compile(entry, phaseIdx, rng);
@@ -512,10 +540,10 @@ export class ParticleSim {
     for (const l of recipe.lifetimes) if (l > maxStarLife) maxStarLife = l;
 
     const shellRange = this.allocator.reserve(CLASS.STAR, 1, now, recipe.fuseTime);
-    if (!shellRange) return false;
+    if (!shellRange) return null;
 
     const starsChild = reserveChildRange(this.allocator, shellRange, CLASS.STAR, recipe.starCount, now, maxStarLife);
-    if (!starsChild) return false;
+    if (!starsChild) return null;
 
     this.writeShell(shellRange, recipe, launchX, launchZ, now, rng);
     this.writeStars(starsChild, recipe, roleForFamily(family), now, rng);
@@ -544,7 +572,14 @@ export class ParticleSim {
       if (crackleChild) this.writeCrackle(crackleChild, starsChild.range, recipe, now, rng);
     }
 
-    return true;
+    return {
+      breakTime: now + recipe.fuseTime,
+      position: new THREE.Vector3(launchX, recipe.apexHeight, launchZ),
+      color: new THREE.Color(recipe.colorRamp[3], recipe.colorRamp[4], recipe.colorRamp[5]),
+      caliber: recipe.caliber,
+      starCount: recipe.starCount,
+      breakRadius: recipe.breakRadius,
+    };
   }
 
   private writeShell(range: SlotRange, recipe: GpuRecipe, launchX: number, launchZ: number, now: number, rng: RNG): void {
