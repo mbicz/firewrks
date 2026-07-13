@@ -61,6 +61,7 @@ import {
 
 import { BURST_LIGHTS_N, CAMERA, SIM_HZ, STAGE } from '../show/constants';
 import { ROLE, aliveMask, colorRampNode, type ParticleSim, type RenderBuffers } from './sim';
+import { Atmosphere, buildStarHazeNode, hazeColorLerp, hazeEmissiveMultiplier, hazeScaleMultiplier } from './atmosphere';
 
 // ---------------------------------------------------------------------------
 // Tuning constants (local to the renderer — spec §2/§4.8/§5, not part of the frozen numeric
@@ -158,9 +159,9 @@ export class ShowRenderer {
   private readonly alphaUniform = uniform(1);
   private readonly projScaleYUniform: UniformNode;
 
-  // Burst light uniforms driving the ground/horizon quad (plan step 5). Phase 6's
-  // `src/gpu/atmosphere.ts` owns the REAL top-N burst-light selection/hysteresis/fade
-  // bookkeeping (spec §4.7); this is a flat, caller-driven STUB — see `setBurstLight` below.
+  // Burst light uniforms driving the ground/horizon quad (plan step 5). `src/gpu/atmosphere.ts`
+  // owns the REAL top-N burst-light selection/hysteresis/fade bookkeeping (spec §4.7) and
+  // pushes its per-slot output here every tick via `setBurstLight`/`clearBurstLight` below.
   private readonly burstLightPos = uniformArray(
     Array.from({ length: BURST_LIGHTS_N }, () => new THREE.Vector3()),
     'vec3',
@@ -177,7 +178,7 @@ export class ShowRenderer {
   private smoothedExposure = 1;
   private lastExposureTs = performance.now();
 
-  constructor(renderer: THREE.WebGPURenderer, camera: THREE.PerspectiveCamera, sim: ParticleSim) {
+  constructor(renderer: THREE.WebGPURenderer, camera: THREE.PerspectiveCamera, sim: ParticleSim, atmosphere: Atmosphere) {
     this.renderer = renderer;
     this.camera = camera;
     this.projScaleYUniform = uniform(camera.projectionMatrix.elements[5]);
@@ -185,7 +186,7 @@ export class ShowRenderer {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000); // spec §4.8: "sky is otherwise dark"
 
-    const starMaterial = this.buildStarMaterial(sim.renderBuffers);
+    const starMaterial = this.buildStarMaterial(sim.renderBuffers, atmosphere);
     this.starSprite = new THREE.Sprite(starMaterial);
     this.starSprite.count = sim.capacity;
     this.starSprite.frustumCulled = false;
@@ -270,7 +271,7 @@ export class ShowRenderer {
   // Star material: velocity-stretched billboards + break flash + MRT emissive.
   // ---------------------------------------------------------------------------
 
-  private buildStarMaterial(buffers: RenderBuffers): THREE.SpriteNodeMaterial {
+  private buildStarMaterial(buffers: RenderBuffers, atmosphere: Atmosphere): THREE.SpriteNodeMaterial {
     const material = new THREE.SpriteNodeMaterial({
       transparent: true,
       depthWrite: false,
@@ -314,10 +315,16 @@ export class ShowRenderer {
     // climbing past `life` via sim.ts's unconditional lifecycle pass; normally hidden by
     // `aliveMask`) — for BREAK_FLASH_TICKS ticks right after `age` first exceeds `life`, force
     // it visible at BREAK_FLASH_INTENSITY x.
+    // Guard against zero-initialized (never-launched) pool slots: default GPU-buffer memory is
+    // all-zero, so an untouched slot has role=0 (=ROLE.SHELL), age=0, life=0 — which satisfies
+    // "role===SHELL && ageSinceBreak in [0,duration)" by coincidence and would flash the ENTIRE
+    // pool's dead slots at BREAK_FLASH_INTENSITY every frame. `lifeAttr > 0` excludes any slot
+    // that was never actually assigned a recipe (real launches always set a positive lifetime).
     const role = behaviorAttr.x;
+    const everLaunched = lifeAttr.greaterThan(float(0));
     const ageSinceBreak = ageAttr.sub(lifeAttr);
-    const isBreakFlash = role
-      .equal(float(ROLE.SHELL))
+    const isBreakFlash = everLaunched
+      .and(role.equal(float(ROLE.SHELL)))
       .and(ageSinceBreak.greaterThanEqual(float(0)))
       .and(ageSinceBreak.lessThan(float(BREAK_FLASH_DURATION_S)));
     const flashBoost = select(isBreakFlash, float(BREAK_FLASH_INTENSITY), float(1));
@@ -332,11 +339,16 @@ export class ShowRenderer {
       .mul(flashBoost)
       .mul(float(EMISSIVE_INTENSITY_SCALE));
 
+    // Spec §4.7 star haze: 4-tap density march (vertex stage only — see `buildStarHazeNode`)
+    // widens the glow disc, dims emissive, and desaturates toward warm grey. Uses the
+    // interpolated `renderPos` (not the raw sim position) so haze tracks what's actually drawn.
+    const haze = buildStarHazeNode(atmosphere, renderPos);
+
     material.positionNode = renderPos;
     material.rotationNode = rotationAngle;
-    material.scaleNode = vec2(stretchViewLen, float(STAR_THICKNESS));
-    material.colorNode = baseColor;
-    material.emissiveNode = baseColor.mul(glow);
+    material.scaleNode = vec2(stretchViewLen, float(STAR_THICKNESS)).mul(hazeScaleMultiplier(haze));
+    material.colorNode = hazeColorLerp(baseColor, haze);
+    material.emissiveNode = baseColor.mul(glow).mul(hazeEmissiveMultiplier(haze));
     material.opacityNode = select(visible, float(1), float(0));
 
     return material;
