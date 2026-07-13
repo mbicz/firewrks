@@ -429,6 +429,15 @@ export class ParticleSim {
     return this.windUniform.value.clone();
   }
 
+  /** Zero-allocation counterpart to `windVector` (additive hook, plan Phase 7): writes into a
+   * caller-owned scratch vector instead of cloning a new one every call, for the real show
+   * loop's steady-state per-tick path, which must not allocate (`main.ts`'s guard comment). The
+   * debug harness keeps using the cloning `windVector` getter above — its own tick loop was
+   * never held to that guard. */
+  windVectorInto(target: THREE.Vector3): THREE.Vector3 {
+    return target.copy(this.windUniform.value);
+  }
+
   /** Ballistics integration shared by pass (a) and pass (c): gravity + wind + curl noise, quadratic
    * drag opposing velocity, semi-implicit Euler (spec §2, §4.5). Division-by-zero is avoided (never
    * `normalize()` on a possibly-zero velocity) so a freshly-activated, still-motionless particle
@@ -531,7 +540,15 @@ export class ParticleSim {
    * allocator's defer contract — otherwise returns the resulting `BreakEvent` so callers (e.g.
    * `atmosphere.ts`) can schedule smoke injection/burst lights off its exact `breakTime`.
    */
-  launch(entry: CatalogEntry, phaseIdx: number, rng: RNG, now: number, launchX: number, launchZ: number): BreakEvent | null {
+  launch(
+    entry: CatalogEntry,
+    phaseIdx: number,
+    rng: RNG,
+    now: number,
+    launchX: number,
+    launchZ: number,
+    finale = false,
+  ): BreakEvent | null {
     const family = entry.phases[phaseIdx]?.breakFamily;
     if (!family) throw new Error(`ParticleSim.launch: phase ${phaseIdx} of "${entry.id}" has no breakFamily`);
     const recipe = compile(entry, phaseIdx, rng);
@@ -539,11 +556,19 @@ export class ParticleSim {
     let maxStarLife = 0;
     for (const l of recipe.lifetimes) if (l > maxStarLife) maxStarLife = l;
 
-    const shellRange = this.allocator.reserve(CLASS.STAR, 1, now, recipe.fuseTime);
+    const shellRange = this.allocator.reserve(CLASS.STAR, 1, now, recipe.fuseTime, finale);
     if (!shellRange) return null;
 
-    const starsChild = reserveChildRange(this.allocator, shellRange, CLASS.STAR, recipe.starCount, now, maxStarLife);
-    if (!starsChild) return null;
+    const starsChild = reserveChildRange(this.allocator, shellRange, CLASS.STAR, recipe.starCount, now, maxStarLife, 0, finale);
+    if (!starsChild) {
+      // Roll back: the shell slot above is already live in the allocator, but nothing was ever
+      // written into it (writeShell() hasn't run yet) — leaving it reserved would leak pool
+      // capacity for `recipe.fuseTime*1.35` seconds per failed launch for no visible particle,
+      // silently shrinking effective capacity under sustained pool pressure (found while wiring
+      // Phase 7's over-scheduled stress path; root-caused by reading this reservation sequence).
+      this.allocator.release(shellRange);
+      return null;
+    }
 
     this.writeShell(shellRange, recipe, launchX, launchZ, now, rng);
     this.writeStars(starsChild, recipe, roleForFamily(family), now, rng);

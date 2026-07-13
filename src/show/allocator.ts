@@ -36,8 +36,16 @@ export class Allocator {
     this.capacity = capacity;
   }
 
-  /** Drops ranges whose `freeAt` has passed `now` — the only place recycling happens. */
-  private recycle(now: number): void {
+  /** Drops ranges whose `freeAt` has passed `now` — otherwise the ONLY place recycling happens
+   * is inside `reserve()` (called below), so a caller doing its own cheap capacity pre-check
+   * BEFORE ever calling `reserve()` (see `main.ts`'s Phase 7 high-water-mark guard) must call
+   * this directly first, or the pool can never appear to free up again: `liveRanges` would stay
+   * permanently stale, the pre-check would keep reporting "full" forever, `reserve()` (and thus
+   * this method) would never run again, and every future event would defer into an ever-growing
+   * queue with no possibility of ever succeeding. Public and idempotent — safe to call every
+   * tick regardless of whether a reservation is about to be attempted.
+   */
+  recycle(now: number): void {
     if (this.live.length === 0) return;
     this.live = this.live.filter((r) => r.freeAt > now);
   }
@@ -83,6 +91,16 @@ export class Allocator {
     this.cursor = start + count;
     return range;
   }
+
+  /** Rolls back a reservation before its `freeAt` (additive; only used to undo a partial
+   * multi-range event — e.g. `ParticleSim.launch()` reserving a shell slot successfully but
+   * then failing to reserve its mandatory star-child range — so a failed launch never leaks
+   * pool capacity it never actually used). Normal recycling still happens via `freeAt` inside
+   * `reserve()`; this is the only other path that removes a live range. */
+  release(range: SlotRange): void {
+    const idx = this.live.indexOf(range);
+    if (idx !== -1) this.live.splice(idx, 1);
+  }
 }
 
 /**
@@ -100,10 +118,11 @@ export function reserveChildRange(
   now: number,
   maxLifetime: number,
   trailLag = 0,
+  finale = false,
 ): { range: SlotRange; parentIndices: Int32Array } | null {
   if (childrenPerParent <= 0) throw new Error('reserveChildRange: childrenPerParent must be positive');
   const count = parentRange.count * childrenPerParent;
-  const range = allocator.reserve(classId, count, now, maxLifetime, false, trailLag);
+  const range = allocator.reserve(classId, count, now, maxLifetime, finale, trailLag);
   if (!range) return null;
 
   const parentIndices = new Int32Array(count);
