@@ -154,6 +154,7 @@ export class ShowRenderer {
 
   private readonly renderer: THREE.WebGPURenderer;
   private readonly camera: THREE.PerspectiveCamera;
+  private readonly sim: ParticleSim;
   private readonly renderPipeline: THREE.RenderPipeline;
 
   private readonly alphaUniform = uniform(1);
@@ -181,6 +182,7 @@ export class ShowRenderer {
   constructor(renderer: THREE.WebGPURenderer, camera: THREE.PerspectiveCamera, sim: ParticleSim, atmosphere: Atmosphere) {
     this.renderer = renderer;
     this.camera = camera;
+    this.sim = sim;
     this.projScaleYUniform = uniform(camera.projectionMatrix.elements[5]);
 
     this.scene = new THREE.Scene();
@@ -188,7 +190,7 @@ export class ShowRenderer {
 
     const starMaterial = this.buildStarMaterial(sim.renderBuffers, atmosphere);
     this.starSprite = new THREE.Sprite(starMaterial);
-    this.starSprite.count = sim.capacity;
+    this.starSprite.count = sim.activeSlotCount; // kept in sync every frame in render(), below
     this.starSprite.frustumCulled = false;
     this.scene.add(this.starSprite);
 
@@ -260,8 +262,16 @@ export class ShowRenderer {
     });
   }
 
-  /** Renders one frame: auto-exposure update, then the MRT/bloom/tonemap pipeline. */
+  /** Renders one frame: auto-exposure update, then the MRT/bloom/tonemap pipeline.
+   *
+   * `starSprite.count` is re-synced from `sim.activeSlotCount` every frame (not just at
+   * construction): the star material draws exactly that many instances (a live, per-frame-read
+   * property — confirmed against `node_modules/three/src/renderers/common/RenderObject.js`'s
+   * `instanceCount = Math.max(0, object.count)`, not baked in once), so the draw call — like
+   * `sim.tick()`'s compute dispatch — only ever covers the pool's currently-active prefix instead
+   * of unconditionally drawing all `capacity` sprite instances regardless of how many are live. */
   render(): void {
+    this.starSprite.count = this.sim.activeSlotCount;
     this.syncCamera();
     this.updateExposure();
     this.renderPipeline.render();
