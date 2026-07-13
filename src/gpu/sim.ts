@@ -725,16 +725,43 @@ export class ParticleSim {
     this.markDirtyAll(range);
   }
 
+  // Minimum compute dispatch / draw-instance count even when nothing is live yet (avoids a
+  // literally-zero WebGPU dispatch at show start, and keeps small workgroup-rounding overhead
+  // negligible either way).
+  private static readonly MIN_DISPATCH = 256;
+
+  /** Smallest prefix `[0, n)` of the pool guaranteed to cover every live particle as of the last
+   * `tick()` call — see `Allocator.highWaterMark`'s doc comment for why this exists. `render.ts`
+   * reads this every frame to bound `starSprite.count` the same way `tick()` bounds compute
+   * dispatch, so the render draw call is equally sized to the pool's actual live region. */
+  get activeSlotCount(): number {
+    return this.activeCount;
+  }
+  private activeCount = ParticleSim.MIN_DISPATCH;
+
   /** One fixed 1/60 s sim step. The only per-tick CPU->GPU traffic is the `simTimeUniform` scalar
    * (a uniform, not a buffer range) — no per-particle CPU writes happen here (guard: "the ONLY
-   * steady-state CPU->GPU traffic is per-event range uploads + global uniforms"). */
+   * steady-state CPU->GPU traffic is per-event range uploads + global uniforms").
+   *
+   * Every compute pass is built once (construction time) against the FULL pool `capacity`, but
+   * `renderer.compute(pass, dispatchSize)`'s documented `dispatchSize` override (confirmed against
+   * `node_modules/three/src/renderers/common/Renderer.js`'s `compute(computeNodes, dispatchSize)`
+   * and the WebGPU backend's `dispatchWorkgroups` call, which recomputes from a NEW `dispatchSize`
+   * every time it differs from the previous call — not baked in once) lets each call actually
+   * dispatch only over the pool's currently-active prefix instead of unconditionally processing
+   * (and, in `render.ts`, drawing) all `capacity` slots every tick regardless of how many are
+   * live. Skipping this was the root cause of ~1 FPS on real hardware with `POOL_CAPACITY`=1.5M
+   * against a typical live count of 15-70k: five full-capacity compute dispatches plus a
+   * 1.5-million-instance sprite draw, every frame, regardless of liveness. */
   tick(simTime: number): void {
     this.simTimeUniform.value = simTime;
-    this.renderer.compute(this.passParentsIntegrate); // (a)
-    this.renderer.compute(this.passActivation); // (b)
-    this.renderer.compute(this.passBallistics); // (c)
-    this.renderer.compute(this.passEvents); // (d)
-    this.renderer.compute(this.passLifecycle); // (e)
+    this.allocator.recycle(simTime); // fresh bound even on ticks with no launch event
+    this.activeCount = Math.max(ParticleSim.MIN_DISPATCH, this.allocator.highWaterMark());
+    this.renderer.compute(this.passParentsIntegrate, this.activeCount); // (a)
+    this.renderer.compute(this.passActivation, this.activeCount); // (b)
+    this.renderer.compute(this.passBallistics, this.activeCount); // (c)
+    this.renderer.compute(this.passEvents, this.activeCount); // (d)
+    this.renderer.compute(this.passLifecycle, this.activeCount); // (e)
   }
 
   /** Reads back the position buffer and counts non-finite components (debug mode: called every

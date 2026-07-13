@@ -55,6 +55,20 @@ export class Allocator {
     return this.live;
   }
 
+  /** Highest occupied slot index across all live ranges, i.e. the smallest prefix `[0, n)` of
+   * the pool that is guaranteed to contain every currently-live particle. Callers (`sim.ts`'s
+   * `tick()`, `render.ts`'s draw call) use this to bound GPU compute dispatch / instanced-draw
+   * size to the pool's actually-active region instead of the full fixed capacity — dispatching
+   * every compute pass and drawing every sprite instance over the full capacity every frame
+   * regardless of how many particles are live (found live, on real hardware: ~1 FPS with
+   * POOL_CAPACITY=1.5M against a typical live count of ~15-70k) wastes the overwhelming majority
+   * of GPU work on empty slots. O(live range count); call after `recycle()` for a tight bound. */
+  highWaterMark(): number {
+    let max = 0;
+    for (const r of this.live) max = Math.max(max, r.start + r.count);
+    return max;
+  }
+
   /**
    * Reserves `count` contiguous slots for `classId`. `maxLifetime` is the pre-jitter worst-case
    * star lifetime (seconds) for this event's recipe; `freeAt` rounds up by the spec's §5.2 +35%
