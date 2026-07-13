@@ -68,7 +68,6 @@ const CURL_FREQ = 0.015; // 1/m — macro turbulence wavelength (~65 m), §5.1
 const CURL_EPS = 0.6; // finite-difference step (world meters) for the curl-noise gradient
 const CURL_STRENGTH = 3.5; // m/s^2 base turbulence acceleration before per-role gain
 
-const POINT_SIZE = 2.5; // debug point-render size (world units, ~2-3 px at the spec camera dist)
 const EMBER_RGB: readonly [number, number, number] = [0.227, 0.063, 0.024]; // #3a1006, spec §3.6
 
 /** Ideal (no-drag) launch speed reaching `apexHeight` at `riseTime`, from kinematics
@@ -255,7 +254,6 @@ export interface BreakEvent {
 export class ParticleSim {
   readonly capacity: number;
   readonly allocator: Allocator;
-  readonly sprite: THREE.Sprite;
 
   private readonly renderer: THREE.WebGPURenderer;
 
@@ -382,30 +380,15 @@ export class ParticleSim {
       });
     }, capacity);
 
-    const material = new THREE.SpriteNodeMaterial({
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const ageAttr = this.ageBuf.toAttribute();
-    const lifeAttr = this.lifeBuf.toAttribute();
-    const alive = aliveMask(ageAttr, lifeAttr);
-    material.positionNode = this.positionBuf.toAttribute().xyz;
-    material.colorNode = colorRampNode(this.colorBuf.toAttribute().xyz, ageAttr, lifeAttr, this.behaviorBuf.toAttribute().w, this.simTimeUniform);
-    material.scaleNode = select(alive, float(POINT_SIZE), float(0));
-    material.opacityNode = select(alive, float(1), float(0));
-
-    this.sprite = new THREE.Sprite(material);
-    this.sprite.count = capacity;
-    this.sprite.frustumCulled = false;
   }
 
   // ---------------------------------------------------------------------------
   // Minimal read-only accessor for `src/gpu/render.ts` (plan Phase 5): the production
   // renderer builds its OWN material/sprite/post pipeline from this bundle of buffers/
-  // uniforms rather than this class's debug point material above — no compute-pass or
-  // buffer-layout changes, one additive getter only (plan Phase 5 guard: "add a minimal
-  // getter rather than restructuring the class").
+  // uniforms — no compute-pass or buffer-layout changes, one additive getter only (plan
+  // Phase 5 guard: "add a minimal getter rather than restructuring the class"). This class's
+  // own Phase-4 debug point material/sprite (superseded once render.ts's ShowRenderer became
+  // the real renderer for both production and `?debug=sim`) was removed in Phase 8 cleanup.
   // ---------------------------------------------------------------------------
 
   get renderBuffers(): RenderBuffers {

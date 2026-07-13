@@ -7,17 +7,16 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
-    "serve": "node server/index.mjs",
-    "golden": "node tools/golden.mjs"
+    "serve": "node server/index.mjs"
   },
   "dependencies": {
-    "three": "0.185.0",
-    "serve-handler": "6.1.7"
+    "serve-handler": "6.1.7",
+    "three": "0.185.0"
   },
   "devDependencies": {
-    "vite": "^6",
-    "vitest": "^3",
+    "@webgpu/types": "^0.1.71",
     "typescript": "^5",
-    "puppeteer": "^24"
+    "vite": "^6",
+    "vitest": "^3"
   }
 }

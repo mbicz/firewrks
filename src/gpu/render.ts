@@ -2,8 +2,8 @@
 // strategy, §4.8 renderer). Builds the PRODUCTION sprite material — velocity-stretched
 // billboards, MRT emissive channel, pre-tonemap selective bloom, hue-preserving tonemap,
 // break-flash, ground/horizon burst-light quad, auto-exposure — from `ParticleSim.renderBuffers`,
-// replacing sim.ts's Phase-4 debug point material (which stays untouched: `sim.sprite` was a
-// visual-assertion aid for Phase 4's own DoD, not restructured here per the plan's guard).
+// replacing sim.ts's now-removed Phase-4 debug point material (see Phase 8 cleanup note in
+// sim.ts's `ParticleSim.renderBuffers` doc comment).
 //
 // Ground truth for the MRT/bloom wiring: three.js ea4b88c
 // `examples/webgpu_postprocessing_bloom_emissive.html`. One deviation from the plan's inlined
