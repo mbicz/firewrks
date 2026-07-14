@@ -186,13 +186,23 @@ function windNode(windBase: Vec3Node, simTime: FloatNode, classId: FloatNode): V
 
 /** Three-phase color ramp (ignition white -> agent color -> charcoal ember, spec §3.6) plus a
  * per-star flicker (spec §5.2 "brightness flicker via per-star phase-offset noise"). Shared by the
- * debug point material here and reusable by Phase 5's real render material. */
+ * debug point material here and reusable by Phase 5's real render material.
+ *
+ * Ember onset is deliberately LATE (t=0.82, not the original t=0.55) and capped well short of
+ * full ember (max 55% blend, not 100%): trail sparks share this same ramp scaled to their OWN
+ * (often very short) lifetime, so starting the ember transition at t=0.55 meant most sparks —
+ * vastly more numerous on screen than primary stars — spent nearly half their visible existence
+ * shifting toward dark red-brown regardless of their true agent color, reading as an overall
+ * red/orange-dominated show (found from live visual feedback: real product colors — green,
+ * blue, gold, silver — were washing out to ember). A star/spark's true color now reads clearly
+ * for the large majority of its life, cooling only in its final moments, and never loses its
+ * color identity entirely even at full decay. */
 export function colorRampNode(baseColor: Vec3Node, age: FloatNode, life: FloatNode, flickerPhase: FloatNode, simTime: FloatNode): Vec3Node {
   const t = clamp(age.div(float(1e-4).max(life)), float(0), float(1));
   const ignition = vec3(1, 1, 1);
   const ember = vec3(...EMBER_RGB);
   const toAgent = smoothstep(float(0.0), float(0.1), t);
-  const toEmber = smoothstep(float(0.55), float(1.0), t);
+  const toEmber = smoothstep(float(0.82), float(1.0), t).mul(float(0.55));
   const c1 = mix(ignition, baseColor, toAgent);
   const c2 = mix(c1, ember, toEmber);
   const flicker = float(0.8).add(float(0.2).mul(sin(simTime.mul(28.0).add(flickerPhase.mul(6.2832)))));

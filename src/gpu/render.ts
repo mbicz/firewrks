@@ -29,11 +29,13 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import {
   Fn,
   atan,
+  cameraPosition,
   cameraProjectionMatrix,
   cameraViewMatrix,
   clamp,
   dot,
   emissive,
+  exp,
   float,
   instancedArray,
   int,
@@ -44,6 +46,7 @@ import {
   max,
   mix,
   mrt,
+  mx_fractal_noise_vec3,
   normalize,
   output,
   pass,
@@ -366,7 +369,14 @@ export class ShowRenderer {
 
   // ---------------------------------------------------------------------------
   // Ground/horizon quad: unlit, hand-summed burst-light illumination (plan step 5, spec §4.8
-  // "the horizon/ground silhouette material is driven by the same top-N burst-light uniforms").
+  // "the horizon/ground silhouette material is driven by the same top-N burst-light uniforms"),
+  // plus a distance fog fade and low-frequency terrain noise (found from live visual feedback:
+  // the original flat-color plane met the black sky in a razor-sharp geometric edge — an obvious
+  // "floating floor" tell, since the shallow near-horizontal viewing angle means the visible
+  // ground spans a huge range of world-space distances in only a little screen space near the
+  // horizon line). Neither technique needs new geometry: atmospheric fog softens the hard edge
+  // into a gradual fade exactly like a real horizon haze, and the noise breaks up the
+  // mathematically-perfect uniform color into something reading as distant undulating terrain.
   // ---------------------------------------------------------------------------
 
   private buildGroundMesh(): THREE.Mesh {
@@ -376,7 +386,11 @@ export class ShowRenderer {
     material.side = THREE.FrontSide;
 
     const groundNormal = vec3(0, 1, 0);
-    const baseGround = vec3(0.015, 0.017, 0.02); // near-black; sky/ground otherwise dark (§4.8)
+    // Low-frequency fractal noise perturbs the base near-black color slightly (a warmer, subtly
+    // uneven near-black rather than one flat uniform triplet) — same noise primitive `sim.ts`
+    // already uses for curl-noise turbulence, at ground scale here.
+    const terrain = mx_fractal_noise_vec3(positionWorld.mul(0.006), int(2), float(2.0), float(0.5)).x;
+    const baseGround = vec3(0.015, 0.017, 0.024).add(vec3(terrain.mul(0.01), terrain.mul(0.009), terrain.mul(0.006)));
 
     let lit = baseGround;
     for (let i = 0; i < BURST_LIGHTS_N; i++) {
@@ -391,6 +405,13 @@ export class ShowRenderer {
       const falloff = lightIntensity.div(distSq); // inverse-square
       lit = lit.add(lightColor.mul(falloff).mul(wrap));
     }
+
+    // Exponential distance fog toward the scene's own black background: fades the hard plane
+    // edge into the sky well before the mathematical horizon, instead of cutting off sharply.
+    const distToCamera = length(positionWorld.sub(cameraPosition));
+    const fog = clamp(float(1).sub(exp(distToCamera.mul(-0.0022))), float(0), float(1));
+    lit = mix(lit, vec3(0, 0, 0), fog);
+
     material.colorNode = lit;
 
     const mesh = new THREE.Mesh(geometry, material);
