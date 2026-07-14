@@ -41,6 +41,7 @@ import {
   instancedArray,
   int,
   ivec3,
+  length,
   max,
   min,
   mix,
@@ -50,6 +51,7 @@ import {
   texture3D,
   textureStore,
   uniform,
+  uv,
   uniformArray,
   vec2,
   vec3,
@@ -556,8 +558,21 @@ export class Atmosphere {
     const recycleGuard = clamp(float(SMOKE_SPRITE_LIFE_S).sub(age).div(SMOKE_SPRITE_RECYCLE_GUARD_S), float(0), float(1));
     const density = vertexStage(this.sampleDensityNode(drifted));
 
+    // Found from live visual feedback: an unlit smoke patch (no nearby burst light, `lit` stays
+    // near-zero) combined with the plain rectangular `THREE.Sprite` quad and opacity driven
+    // purely by density (independent of illumination) produced a sharp-edged, near-opaque BLACK
+    // RECTANGLE wherever aged smoke drifted away from any light source — a hard geometric tell,
+    // the opposite of soft haze. Two additive fixes, both standard real-time VFX technique:
+    //   1. A soft radial alpha falloff from sprite-UV center (round puff, not a hard-edged quad).
+    //   2. A tiny ambient floor added to `lit` so unlit smoke reads as a dim, barely-visible dark
+    //      gray haze instead of literal computed black — real night smoke scatters SOME ambient
+    //      light even far from any explicit source.
+    // Opacity itself is also capped well short of 1 (max ~0.45) so even a fully radial-falloff-
+    // centered, fully-lit patch stays translucent haze rather than solid occluding matter.
+    const radialFalloff = clamp(float(1).sub(length(uv().sub(vec2(0.5))).mul(2.0)), float(0), float(1));
+
     const viewDir = normalize(cameraPosition.sub(drifted));
-    let lit = vec3(0, 0, 0);
+    let lit = vec3(0.006, 0.006, 0.008); // ambient floor — never literal black
     for (let i = 0; i < BURST_LIGHTS_N; i++) {
       const lightPos = this.lightPosUniform.element(i);
       const lightColor = this.lightColorUniform.element(i);
@@ -572,7 +587,7 @@ export class Atmosphere {
     material.positionNode = drifted;
     material.scaleNode = vec2(SMOKE_SPRITE_BASE_SIZE, SMOKE_SPRITE_BASE_SIZE).mul(growth);
     material.colorNode = lit;
-    material.opacityNode = density.mul(fadeIn).mul(recycleGuard).mul(select(alive, float(1), float(0)));
+    material.opacityNode = density.mul(fadeIn).mul(recycleGuard).mul(radialFalloff).mul(float(0.45)).mul(select(alive, float(1), float(0)));
     // Deliberately NO `material.emissiveNode` assignment — smoke stays out of the bloom-driving
     // emissive MRT channel (spec: "smoke sprites render in the non-emissive channel").
 
