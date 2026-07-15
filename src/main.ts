@@ -9,7 +9,9 @@ import { Atmosphere } from './gpu/atmosphere';
 import { loadCatalogEntries, type CatalogEntry } from './show/catalog';
 import { mulberry32 } from './show/rng';
 import { planShow, type PlannerEvent } from './show/planner';
-import { POOL_CAPACITY } from './show/constants';
+import { POOL_CAPACITY, STAGE } from './show/constants';
+import { ShowAudio } from './platform/audio';
+import { startPublisher } from './platform/webrtcPublisher';
 
 // ---------------------------------------------------------------------------
 // Phase 7 — real show integration (spec §4.3, §6, §7): planner -> compiler (inside
@@ -184,6 +186,9 @@ interface FirewrksShowHandle {
   getSimTime(): number;
   getStats(): ShowStats;
   scanForNaN(): Promise<number>;
+  /** Live scene objects for QA visual isolation (toggle `.visible`, read uniforms) — the same
+   * role stepTicks/scanForNaN play for the sim loop, but for renderer-side diagnosis. */
+  objects: { show: ShowRenderer; atmosphere: Atmosphere; sim: ParticleSim };
 }
 declare global {
   interface Window {
@@ -194,7 +199,7 @@ declare global {
 /** Real show integration (plan Phase 7; spec §4.3, §6, §7): catalog -> planner -> (compiler +
  * allocator, inside `ParticleSim.launch`) -> GPU, with pool-exhaustion deferral and the finale
  * reserve enforced by threading `PlannerEvent.finale` through to the allocator. */
-async function startShow(seed: number, rateMultiplier = 1): Promise<void> {
+async function startShow(seed: number, rateMultiplier = 1, stream = false): Promise<void> {
   const renderer = new THREE.WebGPURenderer({ antialias: true });
   await renderer.init();
 
@@ -239,6 +244,16 @@ async function startShow(seed: number, rateMultiplier = 1): Promise<void> {
   show.scene.add(atmosphere.smokeSprite);
 
   showSeedLabel(seed);
+
+  // Procedural sound (platform/audio.ts). Created here because startShow only ever runs inside
+  // the Start button's click call stack — the user gesture WebAudio requires. Seeded with its
+  // own derived stream so audio jitter never consumes draws from the planner/compiler `rng`
+  // (their draw sequences are the seed-reproducibility contract). `?mute` disables entirely —
+  // also the right default for headless soak harnesses.
+  const muted = new URLSearchParams(location.search).has('mute');
+  // In cast mode (`stream`) the audio must play on the TV via the captured track, not the Mac's
+  // speakers, so local output is silenced (outputLocal=false) while the capture tap stays live.
+  const audio = muted ? null : new ShowAudio(mulberry32(seed ^ 0x5f3759d), !stream);
 
   // Preallocated per-tick scratch/callbacks — the steady-state loop below must not allocate
   // (plan Phase 7 guard): a fresh closure or Vector3 every tick, at 60 Hz over a multi-hour
@@ -314,6 +329,7 @@ async function startShow(seed: number, rateMultiplier = 1): Promise<void> {
       return;
     }
     launchedCount++;
+    audio?.launch(event.x);
     scratchAscentPos.set(event.x, breakEvent.position.y * ASCENT_INJECT_HEIGHT_FRAC, 0);
     atmosphere.injectAscent(scratchAscentPos, breakEvent.starCount);
     breakHeap.push({ breakTime: breakEvent.breakTime, position: breakEvent.position, color: breakEvent.color, starCount: breakEvent.starCount });
@@ -344,6 +360,10 @@ async function startShow(seed: number, rateMultiplier = 1): Promise<void> {
       if (top === undefined || top.breakTime > simTime) break;
       breakHeap.pop();
       atmosphere.registerBreak(top.position, top.color, top.starCount, simTime);
+      // Boom scheduled at the FLASH's own moment (this tick) + speed-of-sound travel delay —
+      // hooked here rather than at launch so compressed QA soaks (stepTicks) can't front-load
+      // minutes of booms, and there's zero sim-vs-audio clock drift to accumulate.
+      audio?.breakAt(top.position.x, top.position.y, top.position.z, top.starCount, 0);
     }
   }
 
@@ -376,6 +396,26 @@ async function startShow(seed: number, rateMultiplier = 1): Promise<void> {
     show.render();
   }
 
+  // Interactive launches (live request): a click/tap anywhere fires one extra shell whose stage
+  // x matches the clicked screen x. Reuses `processLaunch` wholesale — pool pre-check, deferral,
+  // ascent smoke, break heap — so an interactive shell is indistinguishable from a scheduled one.
+  // Vocabulary mirrors the planner's collectShots predicate (primary break phases only). Note:
+  // interactive shots draw from the shared show `rng` at launch time, perturbing the remaining
+  // schedule — unavoidable and correct: reproducibility is only promised for untouched runs.
+  const interactiveShots: { entryId: string; phaseIdx: number }[] = [];
+  for (const entry of entries) {
+    entry.phases.forEach((phase, phaseIdx) => {
+      if (phase.kind === 'break' && phase.breakFamily) interactiveShots.push({ entryId: entry.id, phaseIdx });
+    });
+  }
+  renderer.domElement.addEventListener('pointerdown', (e: PointerEvent) => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const shot = interactiveShots[Math.floor(rng() * interactiveShots.length)];
+    const x = ((e.clientX - rect.left) / rect.width - 0.5) * STAGE.w;
+    processLaunch({ t: simTime, entryId: shot.entryId, phaseIdx: shot.phaseIdx, x, finale: false });
+  });
+
   // QA verification hook (see the block comment above `FirewrksShowHandle`): the real show's
   // counterpart to `debugHarness.ts`'s `window.__firewrksDebug`, driving this SAME loop's own
   // `stepOnce`/`renderFrame` — not a separate synthetic path — so a compressed multi-minute
@@ -403,10 +443,21 @@ async function startShow(seed: number, rateMultiplier = 1): Promise<void> {
       };
     },
     scanForNaN: () => sim.scanForNaN(),
+    objects: { show, atmosphere, sim },
   };
 
   let acc = 0;
   let lastTs = performance.now();
+
+  // WebRTC publish (`?stream=1`): cast this WebGPU render to a display-only client (e.g. an
+  // Android TV whose WebView lacks WebGPU). captureStream grabs the canvas; the show's audio
+  // rides along via ShowAudio's capture tap. Media is peer-to-peer over the LAN — see
+  // src/platform/webrtcPublisher.ts and server/stream.mjs.
+  if (stream) {
+    const castStream = renderer.domElement.captureStream(30);
+    if (audio) castStream.addTrack(audio.audioTrack);
+    startPublisher(castStream);
+  }
 
   function frame(ts: number): void {
     const rawDt = Math.min((ts - lastTs) / 1000, 0.25);
@@ -429,9 +480,25 @@ async function startShow(seed: number, rateMultiplier = 1): Promise<void> {
 function renderDiagnostic(reason: string): void {
   const app = document.querySelector<HTMLDivElement>('#app')!;
   app.innerHTML = '';
-  const pre = document.createElement('pre');
-  pre.textContent = `WebGPU unavailable: ${reason}`;
-  app.appendChild(pre);
+  // Readable on the black body (index.html sets background:#000) and on a TV from across the
+  // room: light text, centered, generous size. A default <pre> is black-on-black — invisible,
+  // which is exactly what a no-WebGPU device (e.g. Android WebView < 121) would show.
+  const box = document.createElement('div');
+  box.style.cssText =
+    'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:center;gap:0.6em;color:#f0e8dc;font:600 28px system-ui,sans-serif;' +
+    'text-align:center;padding:6vh 8vw;';
+  const title = document.createElement('div');
+  title.textContent = 'WebGPU unavailable';
+  title.style.cssText = 'font-size:40px;color:#ffd27a;';
+  const detail = document.createElement('div');
+  detail.textContent = reason;
+  detail.style.cssText = 'font-size:22px;font-weight:400;opacity:0.85;max-width:36em;';
+  const hint = document.createElement('div');
+  hint.textContent = 'This device\u2019s System WebView is too old for WebGPU (needs WebView 121+).';
+  hint.style.cssText = 'font-size:18px;font-weight:400;opacity:0.6;max-width:36em;';
+  box.append(title, detail, hint);
+  app.appendChild(box);
 }
 
 function renderIdle(): void {
@@ -454,7 +521,6 @@ function renderIdle(): void {
       renderDiagnostic(result.reason);
       return;
     }
-    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
     const { seed, rateMultiplier } = parseSeedInput(seedInput.value);
     void startShow(seed, rateMultiplier);
   });
@@ -469,11 +535,27 @@ async function runDebug(seed: number): Promise<void> {
   await runDebugSim(seed);
 }
 
+async function runAutostart(seed: number, rateMultiplier: number, stream: boolean): Promise<void> {
+  // Kiosk/TV entry (Android APK loads `?autostart=1`): no idle screen, no Start click. The
+  // Android wrapper sets `setMediaPlaybackRequiresUserGesture(false)` so ShowAudio's context is
+  // allowed to start without a gesture; on failure we still surface the diagnostic. `?stream=1`
+  // additionally publishes the render over WebRTC (see startShow / webrtcPublisher.ts).
+  const result = await probeWebGPU();
+  if (result.ok === false) {
+    renderDiagnostic(result.reason);
+    return;
+  }
+  void startShow(seed, rateMultiplier, stream);
+}
+
 const params = new URLSearchParams(location.search);
 const debugMode = params.get('debug');
 if (debugMode === 'sim') {
   const seedParam = params.get('seed');
   void runDebug(seedParam !== null ? Number(seedParam) : Date.now());
+} else if (params.has('autostart') || params.has('stream')) {
+  const { seed, rateMultiplier } = parseSeedInput(params.get('seed') ?? String(Date.now()));
+  void runAutostart(seed, rateMultiplier, params.has('stream'));
 } else {
   renderIdle();
 }

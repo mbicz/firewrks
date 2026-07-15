@@ -27,7 +27,10 @@ export const FINALE_RESERVE = 0.3;
 // Ambient inter-launch gaps (spec §4.3's "≤2.5s" was a MAXIMUM meant to prevent dead air, not a
 // target density; combined with real shell visual lifetimes of 5-15s+ it produced many
 // concurrently-overlapping shells reading as continuous mass-launch rather than a fireworks show
-// building one compound at a time — corrected post-launch from live visual feedback).
-export const MAX_GAP_S = 7; // dense (non-lull) ambient upper bound
-export const LULL_MAX_GAP_S = 16; // lull upper bound
+// building one compound at a time — corrected post-launch from live visual feedback, then widened
+// again: even 3-7s gaps kept 2-3 shells airborne at all times, so a shell now mostly finishes
+// blooming before the next launch).
+export const MIN_GAP_S = 5; // dense (non-lull) ambient lower bound
+export const MAX_GAP_S = 12; // dense (non-lull) ambient upper bound
+export const LULL_MAX_GAP_S = 28; // lull upper bound
 export const POOL_CAPACITY = 1_500_000;

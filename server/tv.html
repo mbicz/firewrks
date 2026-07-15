@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>firewrks · cast</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+      #status {
+        position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        color: #ffd27a; font: 600 28px system-ui, sans-serif; text-align: center; opacity: 0.9;
+      }
+    </style>
+  </head>
+  <body>
+    <video id="v" autoplay playsinline></video>
+    <div id="status">Waiting for the show…</div>
+    <script>
+      // WebRTC receiver (role 'tv'). Plays the remote track published by the Mac. No WebGPU here —
+      // just <video>, which any modern-enough WebView (incl. the old ones without WebGPU) handles.
+      const base = location.origin;
+      const video = document.getElementById('v');
+      const status = document.getElementById('status');
+      const ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+      let pc = null;
+
+      const send = (msg) =>
+        fetch(base + '/sig/send/pub', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msg),
+        });
+
+      function setStatus(t) { status.textContent = t; status.style.display = t ? 'block' : 'none'; }
+
+      function makePc() {
+        if (pc) pc.close();
+        pc = new RTCPeerConnection({ iceServers: ICE });
+        pc.ontrack = (e) => {
+          video.srcObject = e.streams[0];
+          setStatus('');
+          // Unmuted playback so audio comes out of the TV (the APK sets
+          // setMediaPlaybackRequiresUserGesture(false)). If the UA still refuses unmuted autoplay,
+          // fall back to muted so at least the video plays — but never re-call play() in a way that
+          // pauses (an earlier unmute-retry left the element showing its paused play-poster).
+          video.muted = false;
+          video.volume = 1;
+          video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+        };
+        pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'ice', candidate: e.candidate }); };
+        pc.onconnectionstatechange = () => {
+          if (pc.connectionState === 'connected') setStatus('');
+          else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) setStatus('Reconnecting…');
+        };
+        return pc;
+      }
+
+      const es = new EventSource(base + '/sig/sub/tv');
+      es.onmessage = async (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'offer') {
+          makePc();
+          await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          send({ type: 'answer', sdp: answer.sdp });
+        } else if (msg.type === 'ice' && pc && msg.candidate) {
+          try { await pc.addIceCandidate(msg.candidate); } catch (e) {}
+        }
+      };
+      es.onerror = () => setStatus('Signaling lost — retrying…');
+    </script>
+  </body>
+</html>

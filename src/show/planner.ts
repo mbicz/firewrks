@@ -5,7 +5,7 @@
 import type { RNG } from './rng';
 import { pick, range } from './rng';
 import type { BreakFamily, CatalogEntry } from './catalog';
-import { LULL_MAX_GAP_S, MAX_GAP_S, STAGE } from './constants';
+import { LULL_MAX_GAP_S, MAX_GAP_S, MIN_GAP_S, STAGE } from './constants';
 
 export interface PlannerEvent {
   t: number; // seconds since show start
@@ -16,7 +16,7 @@ export interface PlannerEvent {
 }
 
 const TAU = Math.PI * 2;
-const LULL_ENVELOPE_THRESHOLD = 0.35;
+const LULL_ENVELOPE_THRESHOLD = 0.45;
 
 interface Shot {
   entry: CatalogEntry;
@@ -75,13 +75,20 @@ export function* planShow(entries: readonly CatalogEntry[], rng: RNG): Generator
 
   while (true) {
     if (t >= nextFinaleAt) {
-      // Finale: a dense burst of events, all flagged so the caller may claim the pool reserve.
-      const finaleShotCount = Math.round(range(rng, [10, 25]));
-      for (let i = 0; i < finaleShotCount; i++) {
-        const shot = pickShot(rng, shots, lastFamily);
-        lastFamily = shot.family;
-        yield { t, entryId: shot.entry.id, phaseIdx: shot.phaseIdx, x: launchX(), finale: true };
-        t += range(rng, [0.15, 0.4]);
+      // Finale: rolling volleys, all flagged so the caller may claim the pool reserve. NOT one
+      // continuous machine-gun run (live visual feedback: 10+ shells airborne at once reads as
+      // an undifferentiated mess) — small 3-4 shell volleys with a breath between them keeps the
+      // finale clearly denser than ambient while every break stays individually readable.
+      const volleyCount = Math.round(range(rng, [3, 5]));
+      for (let v = 0; v < volleyCount; v++) {
+        const volleySize = Math.round(range(rng, [3, 4]));
+        for (let i = 0; i < volleySize; i++) {
+          const shot = pickShot(rng, shots, lastFamily);
+          lastFamily = shot.family;
+          yield { t, entryId: shot.entry.id, phaseIdx: shot.phaseIdx, x: launchX(), finale: true };
+          t += range(rng, [0.3, 0.7]);
+        }
+        if (v < volleyCount - 1) t += range(rng, [2.5, 4.5]); // breath between volleys
       }
       nextFinaleAt = t + range(rng, [900, 1800]);
       continue;
@@ -89,12 +96,13 @@ export function* planShow(entries: readonly CatalogEntry[], rng: RNG): Generator
 
     if (t >= nextEscalationAt) {
       // Escalation wave: a tighter-paced cluster, still ambient (never claims the reserve).
-      const waveCount = Math.round(range(rng, [4, 9]));
+      // Capped small for the same readability reason as the finale volleys above.
+      const waveCount = Math.round(range(rng, [3, 5]));
       for (let i = 0; i < waveCount; i++) {
         const shot = pickShot(rng, shots, lastFamily);
         lastFamily = shot.family;
         yield { t, entryId: shot.entry.id, phaseIdx: shot.phaseIdx, x: launchX(), finale: false };
-        t += range(rng, [0.3, 1.0]);
+        t += range(rng, [1.2, 2.5]);
       }
       nextEscalationAt = t + range(rng, [120, 240]);
       continue;
@@ -122,6 +130,17 @@ export function* planShow(entries: readonly CatalogEntry[], rng: RNG): Generator
     } else {
       lastFamily = shot.family;
       yield { t, entryId: shot.entry.id, phaseIdx: shot.phaseIdx, x: launchX(), finale: false };
+      // Occasional doublet/triplet (real shows fire 2-3 shells nearly together now and then —
+      // variety without sustained density; the ambient gap below still follows the whole group).
+      if (rng() < 0.18) {
+        const extra = rng() < 0.3 ? 2 : 1;
+        for (let i = 0; i < extra; i++) {
+          t += range(rng, [0.4, 1.1]);
+          const mate = pickShot(rng, shots, lastFamily);
+          lastFamily = mate.family;
+          yield { t, entryId: mate.entry.id, phaseIdx: mate.phaseIdx, x: launchX(), finale: false };
+        }
+      }
     }
 
     // Ambient gap: individual shells build one at a time with visible breathing room between
@@ -129,7 +148,7 @@ export function* planShow(entries: readonly CatalogEntry[], rng: RNG): Generator
     // decay, reading as simultaneous mass-launch rather than a compounding show — see
     // constants.ts's MAX_GAP_S/LULL_MAX_GAP_S comment).
     const lull = envelope(t) < LULL_ENVELOPE_THRESHOLD;
-    const gap = lull ? range(rng, [MAX_GAP_S, LULL_MAX_GAP_S]) : range(rng, [3, MAX_GAP_S]);
+    const gap = lull ? range(rng, [MAX_GAP_S, LULL_MAX_GAP_S]) : range(rng, [MIN_GAP_S, MAX_GAP_S]);
     t += gap;
   }
 }

@@ -48,6 +48,7 @@ import {
   normalize,
   pow,
   select,
+  sqrt,
   texture3D,
   textureStore,
   uniform,
@@ -579,9 +580,13 @@ export class Atmosphere {
       const lightIntensity = this.lightIntensityUniform.element(i);
       const toLight = lightPos.sub(drifted);
       const distSq = dot(toLight, toLight).add(1); // spec: "I/(d^2+1)"
-      const lightDir = normalize(toLight);
+      // Gate on intensity>0 (same fix as render.ts's ground loop): idle slots hold position
+      // (0,0,0) and produce a NaN lane on this WebGPU stack that would poison the smoke color;
+      // `select` drops them so only genuinely-lit breaks contribute.
+      const lightDir = toLight.div(sqrt(distSq));
       const forwardBoost = float(1).add(float(2.5).mul(pow(max(dot(lightDir, viewDir), float(0)), float(4)))); // HG-style
-      lit = lit.add(lightColor.mul(lightIntensity.div(distSq)).mul(forwardBoost));
+      const contribution = lightColor.mul(lightIntensity.div(distSq)).mul(forwardBoost);
+      lit = lit.add(select(lightIntensity.greaterThan(float(0)), contribution, vec3(0, 0, 0)));
     }
 
     material.positionNode = drifted;

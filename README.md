@@ -1,86 +1,107 @@
 # firewrks
 
-A locally hosted, realistic aerial fireworks visualization for a big-screen TV. Runs in a WebGPU
-browser on a modern Mac, mirrored to the TV over AirPlay (or any screen-share) — there is no
-dependency on the TV's own GPU. One "Start show" produces an endless, non-repeating ambient
-display driven by a metadata catalog of real firework products.
+A realistic, endless aerial **fireworks show** rendered with **WebGPU**. One click starts a
+non-repeating ambient display driven by a catalog of real firework products — peonies,
+chrysanthemums, willows, palms, strobes, crackling shells, cakes — over a procedural city skyline,
+with a persistent smoke atmosphere that lights and hazes later bursts.
 
-Full design rationale: [`docs/superpowers/specs/2026-07-11-firewrks-realistic-show-design.md`](docs/superpowers/specs/2026-07-11-firewrks-realistic-show-design.md).
-Implementation plan: [`plans/2026-07-11-firewrks-implementation.md`](plans/2026-07-11-firewrks-implementation.md).
+Because the render is pure WebGPU, it also ships with a **WebRTC cast path**: render on any
+WebGPU-capable machine and stream the picture to a display that has no WebGPU of its own (an older
+Android TV, a kiosk panel, a set-top box) — the display just plays a video track.
 
-## Requirements
+![firewrks — fireworks over a city skyline](docs/images/hero.png)
 
-- Node.js and a Chromium-based browser with WebGPU support (Chrome on macOS is the target; run it
-  on the Mac doing the AirPlay/screen-share, not on the TV).
-- `http://localhost` is a secure-context loopback, so WebGPU works without HTTPS setup.
+## Highlights
 
-## Running the show
+- **Endless, seeded, deterministic show** — a low-frequency intensity envelope breathes between
+  sparse lulls and denser volleys; a fixed seed reproduces an identical show (no `Math.random()`
+  anywhere).
+- **Grounded in real products** — every effect in `catalog/*.json` records its source URL,
+  publisher, and verbatim product text alongside the normalized effect vocabulary.
+- **Deliberately imperfect physics** — curl-noise turbulence, per-star lifetime/speed/angle
+  jitter, asymmetric breaks, ragged trails, dud stars, and a decaying 3D smoke field.
+- **Full render pipeline** — velocity-stretched sprite stars, MRT emissive + selective bloom,
+  hue-preserving tonemap, auto-exposure, break-flash, burst-light-lit ground and smoke, and a
+  procedural skyline horizon.
+- **Cast anywhere** — WebRTC publisher + a tiny signaling server + a display-only receiver
+  (browser page or an Android TV APK).
+- **Procedural audio** — synthesized mortar thumps and speed-of-sound-delayed booms, panned to
+  each burst; routed to the remote display when casting.
+
+| Wide show | Close-up |
+|---|---|
+| ![skyline](docs/images/show-skyline.png) | ![close-up](docs/images/render-closeup.png) |
+
+## Quick start (local)
+
+Requires Node.js and a Chromium-based browser with WebGPU (Chrome on macOS is the reference).
+`http://localhost` is a secure context, so no HTTPS setup is needed.
 
 ```sh
 npm install
 npm run build
-npm run serve
+npm run serve          # serves the built app on http://localhost:4173
 ```
 
-Open `http://localhost:4173` (or whatever port `server/index.mjs` prints), click **Start**, and
-mirror the browser window to the TV. The seed field lets you reproduce a specific show; a random
-seed (current timestamp) is prefilled. `?seed=<n>` in the URL prefills it from a link.
+Open the printed URL, click **Start**, and mirror the window to a screen (AirPlay / any
+screen-share) if you like. The seed field reproduces a specific show; `?seed=<n>` prefills it.
+For development, `npm run dev` runs Vite's dev server directly.
 
-For development, `npm run dev` runs Vite's dev server directly instead of building + serving the
-static bundle.
+## Cast to a display without WebGPU
 
-## Debug/QA harness
+Render on the capable machine, play the pixels anywhere. See
+**[docs/webrtc-cast.md](docs/webrtc-cast.md)** for the full walkthrough; in short:
 
-`?debug=sim&seed=<n>` loads an isolated test-fixture scene (a single peony + crossette by
-default) instead of the full ambient show, useful for inspecting one effect in isolation:
+```sh
+npm run build
+npm run cast           # signaling + static server on 0.0.0.0:8765
+```
 
-- `&shell=blue` — one pure `#2244ff` test shell (the tonemap-decision fixture).
-- `&pair=1` — two identical peonies at the same `(x, z)`, 8 simulated seconds apart (the
-  persistent-smoke-atmosphere visual fixture).
-- `&stopAtFrame=N` — flips `document.title` to `FRAME_READY` after `N` rendered frames, for
-  scripted frame capture.
+1. **Publisher** — open a WebGPU browser on the render machine at
+   `http://localhost:8765/?autostart=1&stream=1`.
+2. **Receiver** — point any display's browser at `http://<render-host-ip>:8765/tv`, or install the
+   [Android TV APK](docs/android-client.md) and type the host `ip:port` on its start screen.
 
-Both the debug harness and the real show expose a QA handle on `window` —
-`window.__firewrksDebug` / `window.__firewrksShow` — with `stepTicks(n)`, `renderFrame()`,
-`getSimTime()`, `getStats()` (real show only), and `scanForNaN()` (GPU buffer readback; call this
-explicitly and knowingly — it is not wired into the automatic tick loop, see `src/main.ts`'s
-`stepOnce` comment for why).
+Media flows peer-to-peer over the LAN; only signaling touches the server. The codec/bitrate are
+tuned for reliable playback on weak hardware decoders (VP9 by default).
 
-To exercise the pool-exhaustion/deferral path, use the seed value `stress` (a fixed seed at a
-much higher event rate) instead of a number.
+## Documentation
+
+- **[docs/architecture.md](docs/architecture.md)** — system overview: the CPU show pipeline
+  (planner → compiler → allocator → simulation) and the GPU render pipeline, plus the cast
+  subsystem as a generic "render-remote, display-dumb" pattern.
+- **[docs/webrtc-cast.md](docs/webrtc-cast.md)** — the WebRTC cast pipeline in depth: signaling
+  protocol, codec/bitrate decisions, firewall notes, run instructions.
+- **[docs/android-client.md](docs/android-client.md)** — the Android TV cast-receiver APK: build,
+  install, host configuration, and how the WebView client works.
+- **[AGENTS.md](AGENTS.md)** — contributor/agent guide: commands, conventions, invariants.
 
 ## Testing
 
 ```sh
-npm test          # Vitest: catalog schema, compiler, planner, allocator, atmosphere reference
-npx tsc --noEmit   # type-check
+npm test               # Vitest: catalog schema, compiler, planner, allocator, atmosphere, audio
+npm run typecheck      # tsc --noEmit
 ```
 
-All of the above are CPU-only and deterministic (seeded PRNG, no `Math.random()` anywhere). GPU
-rendering/visual behavior has no automated test harness in this repo; verification during
-development was done interactively via a headless browser tool. See the plan document's Phase 5
-step 4 ("golden frames") for the intended (not yet built) automated visual-regression approach.
+Everything under `test/` is CPU-only and deterministic. GPU/visual behavior is verified
+interactively (there is no automated visual-regression harness).
 
 ## Project layout
 
 ```
-server/index.mjs      Node static server (127.0.0.1 only)
-src/main.ts            Boot/UI, WebGPU capability probe, the real show loop
-src/platform/          Capability probe + resolution/DPR handling
-src/show/               Catalog schema + real product data, planner, compiler, allocator (CPU-only)
-src/gpu/                Particle simulation, renderer/post pipeline, smoke atmosphere (TSL/WebGPU)
-catalog/                Real firework product documents (with source provenance) + generic shells
-test/                  Vitest unit tests for the CPU-only src/show modules
-docs/superpowers/specs/ Design spec
-plans/                 Implementation plan
+server/index.mjs          Static server for the local show (127.0.0.1)
+server/stream.mjs         WebRTC signaling + static server for casting (0.0.0.0)
+server/tv.html            WebRTC receiver page (display-only client)
+src/main.ts               Boot/UI, capability probe, show loop, cast publisher wiring
+src/platform/             Capability probe, DPR/resolution, procedural audio, WebRTC publisher
+src/show/                 Catalog schema + data, planner, compiler, allocator (CPU-only, tested)
+src/gpu/                  Particle sim, renderer/post pipeline, smoke atmosphere (TSL/WebGPU)
+android/                  Android TV cast-receiver APK (framework-only WebView, hand-built)
+catalog/                  Real firework product documents (+ generic shells)
+docs/                     Architecture, cast, and Android docs
+test/                     Vitest unit tests
 ```
 
-## Realism notes
+## License
 
-The effect catalog (`catalog/*.json`) is built from real manufacturer/distributor product pages
-and a pyrotechnics glossary, not invented physics — each entry records its source URL, publisher,
-and verbatim product text alongside the normalized effect vocabulary (see the design spec §4.2 for
-the full grounding rules). The simulation is deliberately imperfect by design: curl-noise
-turbulence, per-star lifetime/speed/angle jitter, asymmetric shell breaks, ragged trails, dud
-stars, and a persistent, gradually-decaying smoke field that visibly lights and hazes later bursts
-— see spec §5 and §4.7.
+MIT — see [LICENSE](LICENSE).
