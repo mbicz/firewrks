@@ -1,5 +1,4 @@
 # firewrks
-<<<<<<< HEAD
 
 A realistic, endless aerial **fireworks show** rendered with **WebGPU**. One click starts a
 non-repeating ambient display driven by a catalog of real firework products — peonies,
