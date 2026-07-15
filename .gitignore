@@ -22,3 +22,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Build artifacts
+dist
+/firewrks.apk
+*.apk
+*.apk.idsig
+
+# Android hand-build outputs + signing keys (never commit keystores)
+android/build/
+*.keystore

@@ -274,10 +274,20 @@ export function compile(entry: CatalogEntry, phaseIdx: number, rng: RNG): GpuRec
 
   const lifetimeBase = familyLifetimeBase(family, rng);
   const lifetimes = new Float32Array(starCount);
+  // Continuous, heavy-tailed per-star decay spread (live visual feedback: the original
+  // `1 ± U[LIFETIME_JITTER]` draw was bimodal — a break's stars died in two tight waves, reading
+  // as one synchronized blink-out. Real breaks scatter burnout continuously with a few
+  // stragglers). Lognormal around the family base, sigma = top of the frozen LIFETIME_JITTER
+  // band, clamped to [0.55x, 2.2x] so no star dies unnaturally fast or hangs forever. Willow
+  // jitters strictly upward, preserving the frozen "willow hang >= WILLOW_MIN_HANG" contract.
+  const lifetimeSigma = LIFETIME_JITTER[1];
   for (let i = 0; i < starCount; i++) {
-    const jitterFrac = range(rng, LIFETIME_JITTER);
-    const sign = family === 'willow' ? 1 : rng() < 0.5 ? -1 : 1;
-    lifetimes[i] = lifetimeBase * (1 + sign * jitterFrac);
+    const g = gaussian(rng);
+    const factor =
+      family === 'willow'
+        ? 1 + Math.abs(g) * lifetimeSigma
+        : Math.min(2.2, Math.max(0.55, Math.exp(g * lifetimeSigma)));
+    lifetimes[i] = lifetimeBase * factor;
   }
 
   const baseSpeed = breakRadius / lifetimeBase;

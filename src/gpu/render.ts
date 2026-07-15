@@ -28,6 +28,7 @@ import * as THREE from 'three/webgpu';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import {
   Fn,
+  abs,
   atan,
   cameraPosition,
   cameraProjectionMatrix,
@@ -37,6 +38,8 @@ import {
   emissive,
   exp,
   float,
+  floor,
+  fract,
   instancedArray,
   int,
   ivec2,
@@ -44,18 +47,23 @@ import {
   log,
   luminance,
   max,
+  min,
   mix,
   mrt,
   mx_fractal_noise_vec3,
-  normalize,
   output,
   pass,
+  pow,
   positionWorld,
   screenSize,
   select,
+  sin,
   smoothstep,
+  step,
   textureLoad,
+  sqrt,
   uniform,
+  uv,
   uniformArray,
   vec2,
   vec3,
@@ -78,9 +86,23 @@ const STRETCH_MIN_PX = 1.0; // plan step 1: "min 1 px"
 const STRETCH_MAX_PX = 40.0; // plan step 1: "max 40 px"
 const BREAK_FLASH_TICKS = 3; // plan step 5: "2-3 frames"
 const BREAK_FLASH_DURATION_S = BREAK_FLASH_TICKS / SIM_HZ;
-const BREAK_FLASH_INTENSITY = 8.0; // plan step 5: "8x star intensity"
-const BLOOM_STRENGTH = 1.2; // plan step 3 starting value
+const BREAK_FLASH_INTENSITY = 5.0; // "8x star intensity" (plan) reduced to 5: at 8x, dense
+// overlapping break-flashes summed additively past the HDR buffer's range, and the overexposed
+// cores tonemapped to black/inverted blobs (live visual feedback). Paired with EMISSIVE_CEILING.
+// Emissive ceiling (float): additive star sprites accumulate in the HDR/bloom buffer, and where
+// many bright bursts overlap the sum blew past what the tonemap handles cleanly — bright cores
+// came out as black holes with red/blue fringing ("negative"/overexposed look, live feedback).
+// Clamping each star's emissive keeps the accumulated total in a sane range so overlaps stay
+// bright-white, never inverted.
+const EMISSIVE_CEILING = 12.0;
+const BLOOM_STRENGTH = 0.65; // reduced from the plan's 1.2 starting value: at 1.2 every burst
+// bloomed into a structureless fog ball wider than the break itself (live visual feedback) —
+// 0.65 keeps a warm halo while the individual stars stay resolvable.
 const BLOOM_RADIUS = 0.4; // plan step 3 starting value
+// Faint warm "city glow" behind the horizon skyline silhouette (light-pollution scatter). Very
+// dim on purpose — auto-exposure lifts lulls by up to +1.5 EV, so anything stronger reads as a
+// bright band rather than distant glow (live feedback). Used only by buildSkyline().
+const HORIZON_GLOW = { x: 0.020, y: 0.013, z: 0.006 } as const;
 
 // AgX passed the tonemap decision procedure (see block comment above) — no purple-shift
 // fallback needed. Kept as a named constant (not inlined) so the fallback path documented
@@ -93,7 +115,10 @@ const EMISSIVE_INTENSITY_SCALE = TONE_MAPPING === THREE.ACESFilmicToneMapping ? 
 // Auto-exposure (plan step 6): asymmetric adaptation + EV clamp.
 const EXPOSURE_SAMPLE_COUNT = 32; // "1/16 downsample" interpreted as a fixed coarse sample grid
 // (§ below) rather than a literal mip level — see `buildExposureComputePass`.
-const EXPOSURE_KEY_VALUE = 0.16; // target "middle grey"-ish average scene luminance
+const EXPOSURE_KEY_VALUE = 0.11; // target average scene luminance. Lowered from 0.16: a mostly-
+// dark sky between launches drove the exposure to the full +1.5 EV clamp, floodlighting residual
+// smoke haze and dim late-life stars into permanent bright clouds (live visual feedback); 0.11
+// keeps lulls looking like night.
 const EXPOSURE_EV_CLAMP = 1.5; // "clamp ±1.5 EV"
 const EXPOSURE_LOW = 2 ** -EXPOSURE_EV_CLAMP;
 const EXPOSURE_HIGH = 2 ** EXPOSURE_EV_CLAMP;
@@ -199,6 +224,8 @@ export class ShowRenderer {
 
     this.groundMesh = this.buildGroundMesh();
     this.scene.add(this.groundMesh);
+    this.scene.add(this.buildSkyline());
+    for (const flare of this.buildFlareSprites()) this.scene.add(flare);
 
     // MRT + selective bloom (Phase 0 snippet / ground truth, see header comment).
     const scenePass = pass(this.scene, this.camera);
@@ -361,7 +388,9 @@ export class ShowRenderer {
     material.rotationNode = rotationAngle;
     material.scaleNode = vec2(stretchViewLen, float(STAR_THICKNESS)).mul(hazeScaleMultiplier(haze));
     material.colorNode = hazeColorLerp(baseColor, haze);
-    material.emissiveNode = baseColor.mul(glow).mul(hazeEmissiveMultiplier(haze));
+    // Clamp per-star emissive so overlapping bursts can't sum past the HDR/bloom range into
+    // black-hole "negative" cores (see EMISSIVE_CEILING).
+    material.emissiveNode = min(baseColor.mul(glow).mul(hazeEmissiveMultiplier(haze)), vec3(EMISSIVE_CEILING, EMISSIVE_CEILING, EMISSIVE_CEILING));
     material.opacityNode = select(visible, float(1), float(0));
 
     return material;
@@ -386,11 +415,18 @@ export class ShowRenderer {
     material.side = THREE.FrontSide;
 
     const groundNormal = vec3(0, 1, 0);
-    // Low-frequency fractal noise perturbs the base near-black color slightly (a warmer, subtly
-    // uneven near-black rather than one flat uniform triplet) — same noise primitive `sim.ts`
-    // already uses for curl-noise turbulence, at ground scale here.
-    const terrain = mx_fractal_noise_vec3(positionWorld.mul(0.006), int(2), float(2.0), float(0.5)).x;
-    const baseGround = vec3(0.015, 0.017, 0.024).add(vec3(terrain.mul(0.01), terrain.mul(0.009), terrain.mul(0.006)));
+    // Low-frequency fractal noise perturbs the base near-black BRIGHTNESS slightly (subtly
+    // uneven terrain rather than one flat triplet). Applied as a clamped MULTIPLIER on the warm
+    // base, never an additive per-channel offset: `mx_fractal_noise_vec3` is unnormalized and
+    // swings well past ±1, and the old additive form (base + terrain*(0.006,0.0055,0.004)) went
+    // deeply negative on noise troughs — AgX then clamps R/G to zero while B's smaller
+    // coefficient survives, painting the whole floor saturated navy (root-caused live: flat
+    // colors rendered correctly, the node graph didn't). A multiplier keeps hue fixed and the
+    // channel always positive no matter what the noise implementation returns.
+    const terrain = clamp(mx_fractal_noise_vec3(positionWorld.mul(0.006), int(2), float(2.0), float(0.5)).x, float(-1), float(1));
+    // Warm near-black (was a blue-leaning 0.015/0.017/0.024 — night ground reads neutral until
+    // a burst actually lights it), modulated ±25% by the terrain noise.
+    const baseGround = vec3(0.008, 0.0075, 0.007).mul(terrain.mul(0.25).add(1));
 
     let lit = baseGround;
     for (let i = 0; i < BURST_LIGHTS_N; i++) {
@@ -400,25 +436,132 @@ export class ShowRenderer {
 
       const toLight = lightPos.sub(positionWorld);
       const distSq = max(dot(toLight, toLight), float(1));
-      const lightDir = normalize(toLight);
+      const lightDir = toLight.div(sqrt(distSq));
       const wrap = max(dot(groundNormal, lightDir), float(0)).mul(0.5).add(0.5); // "wrap term"
       const falloff = lightIntensity.div(distSq); // inverse-square
-      lit = lit.add(lightColor.mul(falloff).mul(wrap));
+      const contribution = lightColor.mul(falloff).mul(wrap);
+      // Gate on intensity>0: an IDLE slot holds position (0,0,0) AND (on this WebGPU/AgX stack)
+      // some op in the term above yields a NaN lane for the degenerate geometry, which
+      // baseGround.add(NaN) then propagates so AgX renders the whole floor as saturated navy
+      // (R/G forced to NaN->0, only B surviving). Proven by bisecting the node graph term by
+      // term against live pixel readback: base+fog alone is warm; adding this loop flips it, and
+      // a hard positive max()-floor collapses to flat grey (the max(NaN,floor)=floor signature).
+      // `select` drops idle slots entirely, so only genuinely-lit breaks touch the sum.
+      lit = lit.add(select(lightIntensity.greaterThan(float(0)), contribution, vec3(0, 0, 0)));
     }
 
-    // Exponential distance fog toward the scene's own black background: fades the hard plane
-    // edge into the sky well before the mathematical horizon, instead of cutting off sharply.
+    // Exponential distance fog to BLACK. The far ground fades fully into the night before its
+    // geometric edge, so the horizon is defined by the skyline silhouette (buildSkyline), not by
+    // this plane. (An earlier version fogged toward a warm glow to hide the plane edge, but that
+    // painted a brown/beige band across mid-frame — worse than the line it replaced.)
     const distToCamera = length(positionWorld.sub(cameraPosition));
-    const fog = clamp(float(1).sub(exp(distToCamera.mul(-0.0022))), float(0), float(1));
+    const fog = clamp(float(1).sub(exp(distToCamera.mul(-0.0045))), float(0), float(1));
     lit = mix(lit, vec3(0, 0, 0), fog);
 
-    material.colorNode = lit;
+    // Final safety clamp: never emit a negative channel (a negative-warm color through AgX's
+    // channel-mixing inset comes out saturated blue). Belt-and-suspenders alongside the
+    // per-light `select` gate above.
+    material.colorNode = max(lit, vec3(0, 0, 0));
 
     const mesh = new THREE.Mesh(geometry, material);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.y = 0;
     mesh.frustumCulled = false;
     return mesh;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Horizon skyline: a procedural city silhouette (+ a low distant hill ridge) on a far backdrop
+  // quad, giving the horizon a real landscape anchor instead of a flat line or a washed glow band
+  // (live feedback: the earlier warm-gradient backdrop read as an ugly brown/beige stripe). Pure
+  // silhouette — near-black buildings with a few lit windows, over a very faint warm "city glow"
+  // sky just above the rooftops (light-pollution scatter). The ground plane (fogged to black at
+  // distance) sits in front and hides the building bases, so the towers appear to rise from behind
+  // the horizon. Opaque, depthWrite off, renderOrder -1: drawn first as the backdrop; the ground
+  // and the additive stars composite over it.
+  // ---------------------------------------------------------------------------
+
+  private buildSkyline(): THREE.Mesh {
+    const HEIGHT = 700;
+    const geometry = new THREE.PlaneGeometry(STAGE.w * 14, HEIGHT, 1, 1);
+    const material = new THREE.NodeMaterial();
+    material.depthWrite = false;
+
+    // Cheap hash of a 1-D cell index -> [0,1); the standard fract(sin()) trick.
+    const hash = Fn(([n]) => fract(sin(n.mul(12.9898)).mul(43758.5453)));
+
+    const x = positionWorld.x;
+    const y = positionWorld.y;
+
+    // Building columns: each ~16 m column gets a pseudo-random height, with rare taller towers.
+    const col = floor(x.div(float(16)));
+    const baseH = mix(float(22), float(105), pow(hash(col), float(1.4)));
+    const tower = step(float(0.9), hash(col.add(float(31)))).mul(mix(float(0), float(95), hash(col.add(float(53)))));
+    const buildingTop = baseH.add(tower);
+
+    // A low-frequency hill ridge behind the city, usually below the rooftops.
+    const ridge = float(26).add(sin(x.mul(0.0022)).mul(14)).add(sin(x.mul(0.0007).add(2)).mul(10));
+    const profile = max(buildingTop, ridge);
+
+    // Silhouette: this fragment is part of the landscape when at/below the profile height.
+    const inSilhouette = step(y, profile);
+
+    // Faint warm city glow, concentrated just above the rooftops and fading up into the night.
+    const glowT = pow(clamp(float(1).sub(y.div(float(280))), float(0), float(1)), float(2.2));
+    const sky = vec3(HORIZON_GLOW.x, HORIZON_GLOW.y, HORIZON_GLOW.z).mul(glowT);
+
+    // Sparse lit windows inside building bodies (grid of ~3.2 x 5 m cells, ~8% lit).
+    const cx = floor(x.div(float(3.2)));
+    const cy = floor(y.div(float(5)));
+    const winLit = step(float(0.92), hash(cx.mul(3.7).add(cy.mul(11.3))));
+    const inBody = step(float(6), y).mul(step(y, buildingTop));
+    const windows = vec3(0.9, 0.62, 0.28).mul(0.05).mul(winLit).mul(inBody);
+
+    const building = vec3(0.003, 0.003, 0.004).add(windows);
+    material.colorNode = mix(sky, building, inSilhouette);
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(0, HEIGHT / 2 - 40, -1100); // ~1500 m out, inside the 2000 far plane
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -1;
+    return mesh;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Anamorphic flare streaks: one thin horizontal additive streak per burst-light slot, width
+  // and brightness driven by the same top-N light uniforms as the ground/smoke (spec §4.7's "one
+  // selection feeds everything" principle). The rest of the pipeline already mimics a camera
+  // (auto-exposure, bloom, tonemap), so a restrained lens artifact on the brightest breaks reads
+  // as the expected photographic response, not decoration. Non-emissive: the streak must never
+  // feed bloom (it IS a bloom-adjacent artifact; double-dipping would fog the frame again).
+  // A zero-intensity slot multiplies the additive color to black — invisible, no CPU toggling.
+  // ---------------------------------------------------------------------------
+
+  private buildFlareSprites(): THREE.Sprite[] {
+    const FLARE_REF_INTENSITY = 350; // starCount-scale (Atmosphere.baseIntensity = starCount)
+    const sprites: THREE.Sprite[] = [];
+    for (let i = 0; i < BURST_LIGHTS_N; i++) {
+      const material = new THREE.SpriteNodeMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const intensity = this.burstLightIntensity.element(i);
+      const strength = clamp(intensity.div(float(FLARE_REF_INTENSITY)), float(0), float(1));
+
+      material.positionNode = this.burstLightPos.element(i);
+      material.scaleNode = vec2(strength.mul(float(190)).add(float(20)), float(3));
+      const u = uv();
+      const falloffX = pow(clamp(float(1).sub(abs(u.x.sub(0.5)).mul(2)), float(0), float(1)), float(3));
+      const falloffY = pow(clamp(float(1).sub(abs(u.y.sub(0.5)).mul(2)), float(0), float(1)), float(1.5));
+      material.colorNode = this.burstLightColor.element(i).mul(falloffX.mul(falloffY)).mul(strength).mul(float(0.9));
+      material.opacityNode = float(1); // additive: color already carries the falloff/strength
+
+      const sprite = new THREE.Sprite(material);
+      sprite.frustumCulled = false;
+      sprites.push(sprite);
+    }
+    return sprites;
   }
 }
 

@@ -1,13 +1,38 @@
 {
   "name": "firewrks",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Realistic WebGPU aerial fireworks show — an endless, non-repeating ambient display driven by a catalog of real firework products, with a WebRTC path to cast it to displays that lack WebGPU (e.g. Android TV).",
   "type": "module",
+  "license": "MIT",
+  "author": "Michal Bicz",
+  "homepage": "https://github.com/mbicz/firewrks#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mbicz/firewrks.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mbicz/firewrks/issues"
+  },
+  "keywords": [
+    "webgpu",
+    "fireworks",
+    "three.js",
+    "tsl",
+    "particles",
+    "simulation",
+    "webrtc",
+    "android-tv",
+    "visualization"
+  ],
+  "private": true,
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "serve": "node server/index.mjs",
+    "cast": "node server/stream.mjs",
+    "apk": "bash android/build-apk.sh",
     "test": "vitest run",
-    "serve": "node server/index.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "serve-handler": "6.1.7",
