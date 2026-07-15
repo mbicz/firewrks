@@ -104,10 +104,12 @@ const BLOOM_RADIUS = 0.4; // plan step 3 starting value
 // bright band rather than distant glow (live feedback). Used only by buildSkyline().
 const HORIZON_GLOW = { x: 0.020, y: 0.013, z: 0.006 } as const;
 
-// AgX passed the tonemap decision procedure (see block comment above) — no purple-shift
-// fallback needed. Kept as a named constant (not inlined) so the fallback path documented
-// above is a one-line swap if a future catalog color proves it wrong.
-const TONE_MAPPING = THREE.AgXToneMapping;
+// Tonemap: Khronos PBR Neutral. AgX was the original choice, but on this content it skewed bright
+// overlapping burst cores toward green/white and oversaturated the highlights (live feedback).
+// Neutral desaturates highlights gracefully toward white while preserving hue on the way up — gold
+// stays gold as it brightens — which is exactly what fireworks need. (ACES fallback would also
+// work but needs the 30% emissive cut below and rotates warm hues more.)
+const TONE_MAPPING = THREE.NeutralToneMapping;
 // Only the ACES fallback step of the procedure calls for a 30% emissive intensity cut; AgX/
 // Neutral do not.
 const EMISSIVE_INTENSITY_SCALE = TONE_MAPPING === THREE.ACESFilmicToneMapping ? 0.7 : 1.0;
