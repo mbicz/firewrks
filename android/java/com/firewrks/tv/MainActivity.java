@@ -6,6 +6,9 @@ import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
+import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.TypedValue;
@@ -49,8 +52,14 @@ public class MainActivity extends Activity {
     private static final String KEY_HOST = "host";
     private static final int DEFAULT_PORT = 8765;
     private static final String APP_ORIGIN = "appassets.local"; // bundled-show asset scheme host
+    private static final String SERVICE_TYPE = "_firewrks._tcp."; // mDNS/DNS-SD service type
 
     private WebView webView;
+    private NsdManager nsdManager;
+    private NsdManager.DiscoveryListener discoveryListener;
+    private WifiManager.MulticastLock multicastLock;
+    private TextView statusView;      // config-screen "searching / found" line
+    private boolean connecting;       // guards against double auto-connect
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,7 +95,7 @@ public class MainActivity extends Activity {
         title.setGravity(Gravity.CENTER);
 
         TextView hint = new TextView(this);
-        hint.setText("Enter the host running the show ( ip:port )");
+        hint.setText("Searching the network\u2026 or enter the host ( ip:port )");
         hint.setTextColor(0xFFB0B0B0);
         hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         hint.setGravity(Gravity.CENTER);
@@ -118,20 +127,95 @@ public class MainActivity extends Activity {
         btnLp.topMargin = dp(20);
         connect.setLayoutParams(btnLp);
 
+        statusView = new TextView(this);
+        statusView.setTextColor(0xFF6FCF6F);
+        statusView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        statusView.setGravity(Gravity.CENTER);
+        statusView.setPadding(0, dp(18), 0, 0);
+
         root.addView(title);
         root.addView(hint);
         root.addView(input);
         root.addView(connect);
+        root.addView(statusView);
         setContentView(root);
 
         input.requestFocus();
+        connecting = false;
+        startDiscovery();
     }
 
-    /** Normalizes `host` (adds default port + http scheme) and loads its /tv receiver page. */
+    /** Normalizes `host` (adds default port) and loads its /tv receiver page. */
     private void connect(String host) {
+        stopDiscovery();
         String h = host.trim();
         if (!h.contains(":")) h = h + ":" + DEFAULT_PORT; // default port if only an IP was given
         loadUrl("http://" + h + "/tv");
+    }
+
+    // ---------------------------------------------------------------------------
+    // mDNS / DNS-SD auto-discovery (NsdManager): find a host advertising `_firewrks._tcp` and
+    // connect automatically, so the user never has to type an ip:port. Manual entry stays as a
+    // fallback. See server/stream.mjs (advertiseMdns) for the host side.
+    // ---------------------------------------------------------------------------
+
+    private void startDiscovery() {
+        stopDiscovery(); // idempotent: never stack two discovery listeners
+        try {
+            WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi != null && multicastLock == null) {
+                multicastLock = wifi.createMulticastLock("firewrks-mdns");
+                multicastLock.setReferenceCounted(true);
+                multicastLock.acquire();
+            }
+            nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
+            if (nsdManager == null) return;
+            discoveryListener = new NsdManager.DiscoveryListener() {
+                @Override public void onServiceFound(NsdServiceInfo info) {
+                    if (info.getServiceType() != null && info.getServiceType().contains("firewrks")) {
+                        try { nsdManager.resolveService(info, newResolveListener()); } catch (Exception ignored) {}
+                    }
+                }
+                @Override public void onServiceLost(NsdServiceInfo info) {}
+                @Override public void onDiscoveryStarted(String t) {}
+                @Override public void onDiscoveryStopped(String t) {}
+                @Override public void onStartDiscoveryFailed(String t, int code) {}
+                @Override public void onStopDiscoveryFailed(String t, int code) {}
+            };
+            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener);
+        } catch (Exception ignored) { /* discovery is best-effort; manual entry always works */ }
+    }
+
+    /** A fresh ResolveListener per resolve call (NsdManager requires it). On success, auto-connects
+     * to the first host found. */
+    private NsdManager.ResolveListener newResolveListener() {
+        return new NsdManager.ResolveListener() {
+            @Override public void onServiceResolved(NsdServiceInfo info) {
+                if (info.getHost() == null) return;
+                final String hostPort = info.getHost().getHostAddress() + ":" + info.getPort();
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (connecting) return;
+                        connecting = true;
+                        if (statusView != null) statusView.setText("Found " + hostPort + " \u2014 connecting\u2026");
+                        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_HOST, hostPort).apply();
+                        connect(hostPort);
+                    }
+                });
+            }
+            @Override public void onResolveFailed(NsdServiceInfo info, int code) {}
+        };
+    }
+
+    private void stopDiscovery() {
+        if (nsdManager != null && discoveryListener != null) {
+            try { nsdManager.stopServiceDiscovery(discoveryListener); } catch (Exception ignored) {}
+        }
+        discoveryListener = null;
+        if (multicastLock != null && multicastLock.isHeld()) {
+            try { multicastLock.release(); } catch (Exception ignored) {}
+        }
+        multicastLock = null;
     }
 
     // ---------------------------------------------------------------------------
@@ -257,5 +341,11 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (webView != null) webView.onResume();
+    }
+
+    @Override
+    protected void onDestroy() {
+        stopDiscovery();
+        super.onDestroy();
     }
 }

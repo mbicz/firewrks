@@ -1,4 +1,5 @@
 # firewrks
+<<<<<<< HEAD
 
 A realistic, endless aerial **fireworks show** rendered with **WebGPU**. One click starts a
 non-repeating ambient display driven by a catalog of real firework products — peonies,
@@ -59,8 +60,8 @@ npm run cast           # signaling + static server on 0.0.0.0:8765
 
 1. **Publisher** — open a WebGPU browser on the render machine at
    `http://localhost:8765/?autostart=1&stream=1`.
-2. **Receiver** — point any display's browser at `http://<render-host-ip>:8765/tv`, or install the
-   [Android TV APK](docs/android-client.md) and type the host `ip:port` on its start screen.
+2. **Receiver** — install the [Android TV APK](docs/android-client.md); it **auto-discovers** the
+   host over mDNS and connects with no typing (or point any browser at `http://<host-ip>:8765/tv`).
 
 Media flows peer-to-peer over the LAN; only signaling touches the server. The codec/bitrate are
 tuned for reliable playback on weak hardware decoders (VP9 by default).

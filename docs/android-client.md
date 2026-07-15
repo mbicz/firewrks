@@ -7,15 +7,16 @@ This is what lets an Android TV whose System WebView predates WebGPU still show 
 
 ## What it does
 
-- On launch, shows a small **host-entry screen**: type the render host's `ip:port` (persisted
-  across runs), press **Connect**.
+- On launch it **auto-discovers** the render host via mDNS/DNS-SD (`_firewrks._tcp`) and connects
+  with no typing. If nothing is found, enter the host's `ip:port` manually and press **Connect**
+  (persisted across runs).
 - Loads `http://<host>/tv`, the receiver page, and plays the remote track fullscreen with sound.
-- **BACK** returns to the host-entry screen to reconnect or change host.
+- **BACK** returns to the host screen to reconnect or change host.
 - Declares both a normal launcher entry and a TV **leanback** launcher entry (with a banner), so it
   appears on phones/tablets and on the Android TV home row.
 
-There is no hardcoded host. (A future version can auto-discover the host via mDNS instead of manual
-entry.)
+No hardcoded host. Discovery uses the host advertised by `npm run cast` (see `advertiseMdns` in
+`server/stream.mjs`); manual entry is always available as a fallback.
 
 ### Intent overrides (dev/automation)
 

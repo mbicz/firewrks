@@ -10,6 +10,8 @@
          bundled WebGPU show needs none of this (served from assets), but the cast receiver does. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- mDNS/NSD auto-discovery of the render host needs to receive multicast. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <!-- Android TV: no touchscreen, leanback optional so it also installs on phones/tablets. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

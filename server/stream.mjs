@@ -11,6 +11,7 @@
 // it directly at http://<mac-lan-ip>:<port> (no adb tunnel; LAN has no client isolation).
 
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,5 +109,30 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`stream server on http://0.0.0.0:${PORT}`);
   console.log(`  publisher: http://localhost:${PORT}/?autostart=1&stream=1`);
-  console.log(`  tv:        http://<mac-lan-ip>:${PORT}/tv`);
+  console.log(`  tv:        http://<host-lan-ip>:${PORT}/tv`);
+  advertiseMdns(PORT);
 });
+
+// mDNS / DNS-SD advertisement so receivers (e.g. the Android app) can auto-discover the host
+// instead of the user typing its ip:port. Node has no built-in mDNS; rather than add a dependency
+// we drive the OS responder that's already present: `dns-sd` (macOS/Bonjour) or
+// `avahi-publish-service` (Linux). Service type `_firewrks._tcp`, TXT `path=/tv`. If neither tool
+// exists, discovery is simply unavailable and the receiver falls back to manual entry.
+function advertiseMdns(port) {
+  const attempts = [
+    { cmd: 'dns-sd', args: ['-R', 'firewrks', '_firewrks._tcp', 'local', String(port), 'path=/tv'] },
+    { cmd: 'avahi-publish-service', args: ['firewrks', '_firewrks._tcp', String(port), 'path=/tv'] },
+  ];
+  for (const { cmd, args } of attempts) {
+    try {
+      const child = spawn(cmd, args, { stdio: 'ignore' });
+      child.on('error', () => {}); // ENOENT -> tool absent; try the next / give up silently
+      child.on('spawn', () => console.log(`  mDNS:      advertising _firewrks._tcp via ${cmd}`));
+      const stop = () => { try { child.kill(); } catch {} };
+      process.on('exit', stop);
+      process.on('SIGINT', () => { stop(); process.exit(0); });
+      process.on('SIGTERM', () => { stop(); process.exit(0); });
+      return; // first tool that spawns wins
+    } catch { /* try next */ }
+  }
+}
